@@ -1,0 +1,65 @@
+<%- include('partials/header') %>
+
+<h1>统计</h1>
+
+<h2>按请求类型</h2>
+<table>
+  <thead><tr><th>类型</th><th>次数</th><th>tokens</th><th>计费 tokens</th><th>错误</th></tr></thead>
+  <tbody>
+    <% byKind.forEach(function (k) { %>
+      <tr>
+        <td><%= k.kind %></td>
+        <td class="right"><%= fmtInt(k.count) %></td>
+        <td class="right"><%= fmtInt(k.tokens) %></td>
+        <td class="right"><%= fmtInt(k.billed) %></td>
+        <td class="right"><%= fmtInt(k.errors) %></td>
+      </tr>
+    <% }); %>
+    <% if (!byKind.length) { %>
+      <tr><td colspan="5" class="muted">暂无请求</td></tr>
+    <% } %>
+  </tbody>
+</table>
+
+<h2>按 AI</h2>
+<table>
+  <thead><tr><th>AI</th><th>状态</th><th>余额</th><th>初始额度</th><th>请求</th><th>tokens</th><th>计费 tokens</th><th>错误</th></tr></thead>
+  <tbody>
+    <% perAgent.forEach(function (a) { %>
+      <tr>
+        <td><a href="/agents/<%= a.id %>"><%= a.id %></a></td>
+        <td><span class="badge <%= statusClass(a.status) %>"><%= statusText(a.status) %></span></td>
+        <td class="right"><%= fmtInt(a.balance) %></td>
+        <td class="right"><%= fmtInt(a.initial_balance) %></td>
+        <td class="right"><%= fmtInt(a.requests) %></td>
+        <td class="right"><%= fmtInt(a.tokens) %></td>
+        <td class="right"><%= fmtInt(a.billed) %></td>
+        <td class="right"><%= fmtInt(a.errors) %></td>
+      </tr>
+    <% }); %>
+  </tbody>
+</table>
+
+<h2>最近请求</h2>
+<table>
+  <thead><tr><th>时间</th><th>AI</th><th>类型</th><th>模型</th><th>tokens</th><th>计费</th><th>耗时</th><th>状态</th></tr></thead>
+  <tbody>
+    <% recent.forEach(function (r) { %>
+      <tr>
+        <td class="nowrap"><%= fmtDate(r.created_at) %></td>
+        <td><%= r.agent_id || '平台' %></td>
+        <td><%= r.kind %></td>
+        <td class="nowrap"><%= r.model || '' %></td>
+        <td class="right"><%= fmtInt(r.total_tokens) %></td>
+        <td class="right"><%= fmtInt(r.billed_tokens) %></td>
+        <td class="right"><%= r.latency_ms %>ms</td>
+        <td><%= r.status %><%= r.error ? `：${r.error}` : '' %></td>
+      </tr>
+    <% }); %>
+    <% if (!recent.length) { %>
+      <tr><td colspan="8" class="muted">暂无请求</td></tr>
+    <% } %>
+  </tbody>
+</table>
+
+<%- include('partials/footer') %>

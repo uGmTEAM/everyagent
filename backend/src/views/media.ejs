@@ -1,0 +1,149 @@
+<%- include('partials/header') %>
+
+<h1>生图与语音</h1>
+
+<% var imageModels = []; var speechModels = []; var asrModels = []; %>
+<% providers.forEach(function (p) { imageModels = imageModels.concat(p.image_model_list); speechModels = speechModels.concat(p.speech_model_list); asrModels = asrModels.concat(p.asr_model_list); }); %>
+
+<div class="panel">
+  <form method="post" action="/media">
+    <h3>生图</h3>
+    <div class="checks">
+      <label class="check">
+        <input type="checkbox" name="image_enabled" value="1" <%= mediaConfig.image_enabled ? 'checked' : '' %>>
+        启用生图（AI 可用 image_generate）
+      </label>
+    </div>
+    <div class="row">
+      <div>
+        <label>供应商</label>
+        <select name="image_provider_id">
+          <option value="">未选择</option>
+          <% providers.forEach(function (p) { %>
+            <option value="<%= p.id %>" <%= mediaConfig.image_provider_id === p.id ? 'selected' : '' %>><%= p.name %></option>
+          <% }); %>
+        </select>
+      </div>
+      <div>
+        <label>模型</label>
+        <input name="image_model" list="image-model-options" value="<%= mediaConfig.image_model || '' %>" placeholder="例如：agnes-image-2.0-flash">
+        <datalist id="image-model-options">
+          <% imageModels.forEach(function (m) { %><option value="<%= m %>"></option><% }); %>
+        </datalist>
+      </div>
+      <div>
+        <label>默认尺寸</label>
+        <input name="image_size" value="<%= mediaConfig.image_size || '1024x1024' %>" placeholder="1024x1024">
+      </div>
+    </div>
+    <label>附加提示词（可选，每次生图都会拼接在用户提示词之后）</label>
+    <textarea name="image_extra_prompt" rows="3" placeholder="例如：统一使用写实风格，不要出现文字。"><%= mediaConfig.image_extra_prompt || '' %></textarea>
+
+    <h3 style="margin-top:20px">语音合成</h3>
+    <div class="checks">
+      <label class="check">
+        <input type="checkbox" name="speech_enabled" value="1" <%= mediaConfig.speech_enabled ? 'checked' : '' %>>
+        启用语音合成（AI 可用 speech_synthesize）
+      </label>
+    </div>
+    <div class="row">
+      <div>
+        <label>供应商</label>
+        <select name="speech_provider_id">
+          <option value="">未选择</option>
+          <% providers.forEach(function (p) { %>
+            <option value="<%= p.id %>" <%= mediaConfig.speech_provider_id === p.id ? 'selected' : '' %>><%= p.name %></option>
+          <% }); %>
+        </select>
+      </div>
+      <div>
+        <label>模型</label>
+        <input name="speech_model" list="speech-model-options" value="<%= mediaConfig.speech_model || '' %>" placeholder="例如：gpt-4o-mini-tts">
+        <datalist id="speech-model-options">
+          <% speechModels.forEach(function (m) { %><option value="<%= m %>"></option><% }); %>
+        </datalist>
+      </div>
+      <div>
+        <label>默认音色</label>
+        <input name="speech_voice" value="<%= mediaConfig.speech_voice || 'alloy' %>" placeholder="alloy">
+      </div>
+      <div>
+        <label>调用方式</label>
+        <select name="speech_style">
+          <option value="audio" <%= mediaConfig.speech_style !== 'chat' ? 'selected' : '' %>>OpenAI /audio/speech</option>
+          <option value="chat" <%= mediaConfig.speech_style === 'chat' ? 'selected' : '' %>>chat/completions + audio（MiMo 等）</option>
+        </select>
+      </div>
+    </div>
+
+    <h3 style="margin-top:20px">语音识别</h3>
+    <div class="checks">
+      <label class="check">
+        <input type="checkbox" name="asr_enabled" value="1" <%= mediaConfig.asr_enabled ? 'checked' : '' %>>
+        启用语音识别（AI 可用 speech_recognize）
+      </label>
+    </div>
+    <div class="row">
+      <div>
+        <label>供应商</label>
+        <select name="asr_provider_id">
+          <option value="">未选择</option>
+          <% providers.forEach(function (p) { %>
+            <option value="<%= p.id %>" <%= mediaConfig.asr_provider_id === p.id ? 'selected' : '' %>><%= p.name %></option>
+          <% }); %>
+        </select>
+      </div>
+      <div>
+        <label>模型</label>
+        <input name="asr_model" list="asr-model-options" value="<%= mediaConfig.asr_model || '' %>" placeholder="例如：mimo-v2.5-asr">
+        <datalist id="asr-model-options">
+          <% asrModels.forEach(function (m) { %><option value="<%= m %>"></option><% }); %>
+        </datalist>
+      </div>
+      <div>
+        <label>识别语种</label>
+        <select name="asr_language">
+          <option value="auto" <%= mediaConfig.asr_language !== 'zh' && mediaConfig.asr_language !== 'en' ? 'selected' : '' %>>自动</option>
+          <option value="zh" <%= mediaConfig.asr_language === 'zh' ? 'selected' : '' %>>中文</option>
+          <option value="en" <%= mediaConfig.asr_language === 'en' ? 'selected' : '' %>>英文</option>
+        </select>
+      </div>
+      <div>
+        <label>每 AI 每日上限（分钟）</label>
+        <input name="asr_daily_limit_minutes" type="number" min="1" max="1440" value="<%= mediaConfig.asr_daily_limit_minutes || 120 %>">
+      </div>
+    </div>
+    <p class="muted small">
+      语音识别只支持 mp3 / wav，按音频时长计入每个 AI 的每日额度（默认 120 分钟，可改），超出后当天拒绝。
+    </p>
+
+    <p class="muted small">
+      生图按 OpenAI 兼容的 <code>/images/generations</code> 调用，图片保存到 AI 工作区的 <code>/workspace/generated/</code>；
+      语音合成为 mp3 保存到同一目录，支持 <code>/audio/speech</code> 与 chat/completions 两种风格。
+    </p>
+    <button type="submit">保存</button>
+  </form>
+</div>
+
+<% if (asrUsage && asrUsage.length) { %>
+<div class="panel">
+  <h3>今日语音识别用量</h3>
+  <table>
+    <thead><tr><th>AI</th><th>已用（分钟）</th><th>剩余（分钟）</th><th>状态</th></tr></thead>
+    <tbody>
+      <% asrUsage.forEach(function (row) { %>
+        <tr>
+          <td><%= row.id %></td>
+          <td><%= row.used_minutes %></td>
+          <td><%= row.remaining_minutes %></td>
+          <td><%= row.over ? '已达上限' : '可用' %></td>
+        </tr>
+      <% }); %>
+    </tbody>
+  </table>
+</div>
+<% } %>
+
+<p class="muted small">生图和语音请求都会记录到统计，但不扣 AI 的 token 余额。模型列表在「供应商」页维护。</p>
+
+<%- include('partials/footer') %>

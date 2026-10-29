@@ -1,0 +1,285 @@
+<%- include('partials/header') %>
+
+<h1>供应商</h1>
+
+<% if (error === 'in_use') { %>
+  <div class="notice error">该供应商正在被 AI、Judge 或 Oracle 使用，不能删除。</div>
+<% } %>
+<% if (error === 'name') { %>
+  <div class="notice error">名称和接口地址不能为空。</div>
+<% } %>
+<% if (error === 'template') { %>
+  <div class="notice error">自定义请求格式不是合法 JSON，请检查模板。</div>
+<% } %>
+
+<div class="panel">
+  <h3>添加供应商</h3>
+  <form method="post" action="/providers" class="provider-form" data-provider-form>
+    <div class="row">
+      <div><label>名称</label><input name="name" placeholder="例如：我的 DeepSeek" required></div>
+      <div><label>接口地址</label><input name="base_url" data-base-url placeholder="https://api.openai.com/v1" required></div>
+      <div><label>API Key</label><input name="api_key" type="password" autocomplete="off"></div>
+    </div>
+
+    <label>接口类型</label>
+    <select name="provider_type" data-provider-type>
+      <option value="deepseek">DeepSeek 兼容</option>
+      <option value="openai" selected>OpenAI 兼容</option>
+      <option value="custom">自定义接口</option>
+    </select>
+    <p class="muted small" data-type-hint>OpenAI 兼容：接口地址填写到版本号，例如 https://api.openai.com/v1，平台自动补 /chat/completions。</p>
+
+    <div data-custom-fields hidden>
+      <div class="row">
+        <div>
+          <label>请求方式</label>
+          <select name="http_method" data-http-method>
+            <option value="POST" selected>POST</option>
+            <option value="GET">GET</option>
+          </select>
+        </div>
+      </div>
+      <label>请求格式（JSON 模板）</label>
+      <textarea name="request_template" rows="8" data-request-template placeholder='{"model": {{model}}, "messages": {{messages}}, "temperature": {{temperature}}, "max_tokens": {{max_tokens}}}'></textarea>
+      <p class="muted small">
+        可用占位符：{{model}}、{{messages}}、{{temperature}}、{{max_tokens}}、{{stream}}、{{tools}}、{{tool_choice}}、{{prompt}}。
+        POST 时模板作为 JSON 请求体；GET 时模板的每个字段会转成查询参数。留空使用默认模板。
+      </p>
+      <label>输出条目</label>
+      <input name="output_path" data-output-path placeholder="例如：choices.0.message.content 或 data.answer">
+      <textarea rows="4" data-response-sample placeholder="可选：粘贴一段该接口的真实响应 JSON，点下面的按钮解析出可选条目"></textarea>
+      <p style="margin:8px 0"><button type="button" class="light" data-parse-response>解析响应并选择输出条目</button></p>
+      <select data-output-options hidden></select>
+      <p class="muted small" data-parse-message></p>
+    </div>
+
+    <label>文本模型（每行一个或用逗号分隔）</label>
+    <textarea name="models" rows="3" placeholder="每行一个模型名"></textarea>
+    <label>识图模型（每行一个或用逗号分隔）</label>
+    <textarea name="vision_models" rows="2" placeholder="例如：qwen-vl-max"></textarea>
+    <label>多模态模型（每行一个或用逗号分隔）</label>
+    <textarea name="multimodal_models" rows="2" placeholder="例如：gpt-4o、qwen-vl-max"></textarea>
+    <label>生图模型（每行一个或用逗号分隔）</label>
+    <textarea name="image_models" rows="2" placeholder="例如：agnes-image-2.0-flash"></textarea>
+    <label>语音模型（每行一个或用逗号分隔）</label>
+    <textarea name="speech_models" rows="2" placeholder="例如：gpt-4o-mini-tts、mimo-v2.5-tts"></textarea>
+    <label>语音识别模型（每行一个或用逗号分隔）</label>
+    <textarea name="asr_models" rows="2" placeholder="例如：mimo-v2.5-asr"></textarea>
+    <p style="margin-top:10px"><button type="submit">添加</button></p>
+  </form>
+</div>
+
+<table>
+  <thead><tr><th>ID</th><th>名称</th><th>类型</th><th>接口地址</th><th>模型</th><th>输出条目</th><th>Key</th><th>创建时间</th><th>操作</th></tr></thead>
+  <tbody>
+    <% providers.forEach(function (p) { %>
+      <tr>
+        <td><%= p.id %></td>
+        <td><%= p.name %></td>
+        <td class="nowrap">
+          <% if (p.provider_type === 'custom') { %>
+            自定义（<%= p.http_method %>）
+          <% } else if (p.provider_type === 'deepseek') { %>
+            DeepSeek 兼容
+          <% } else { %>
+            OpenAI 兼容
+          <% } %>
+        </td>
+        <td><%= p.base_url %></td>
+          <td>
+            文本：<%= p.model_list.join(', ') || '—' %><br>
+            识图：<%= p.vision_model_list.join(', ') || '—' %><br>
+            多模态：<%= p.multimodal_model_list.join(', ') || '—' %><br>
+            生图：<%= p.image_model_list.join(', ') || '—' %><br>
+            语音：<%= p.speech_model_list.join(', ') || '—' %><br>
+            语音识别：<%= p.asr_model_list.join(', ') || '—' %>
+          </td>
+        <td><%= p.provider_type === 'custom' ? (p.output_path || '未设置') : '—' %></td>
+        <td><%= p.api_key_masked || '未填写' %></td>
+        <td class="nowrap"><%= fmtDate(p.created_at) %></td>
+        <td>
+          <details>
+            <summary>编辑</summary>
+            <form method="post" action="/providers" class="provider-form" data-provider-form>
+              <input type="hidden" name="id" value="<%= p.id %>">
+              <label>名称</label><input name="name" value="<%= p.name %>" required>
+              <label>接口地址</label><input name="base_url" data-base-url value="<%= p.base_url %>" required>
+              <label>API Key（留空保持不变）</label><input name="api_key" type="password" autocomplete="off">
+              <label>接口类型</label>
+              <select name="provider_type" data-provider-type>
+                <option value="deepseek" <%= p.provider_type === 'deepseek' ? 'selected' : '' %>>DeepSeek 兼容</option>
+                <option value="openai" <%= !p.provider_type || p.provider_type === 'openai' ? 'selected' : '' %>>OpenAI 兼容</option>
+                <option value="custom" <%= p.provider_type === 'custom' ? 'selected' : '' %>>自定义接口</option>
+              </select>
+              <p class="muted small" data-type-hint>OpenAI 兼容：接口地址填写到版本号，例如 https://api.openai.com/v1，平台自动补 /chat/completions。</p>
+
+              <div data-custom-fields <%= p.provider_type === 'custom' ? '' : 'hidden' %>>
+                <label>请求方式</label>
+                <select name="http_method" data-http-method>
+                  <option value="POST" <%= p.http_method !== 'GET' ? 'selected' : '' %>>POST</option>
+                  <option value="GET" <%= p.http_method === 'GET' ? 'selected' : '' %>>GET</option>
+                </select>
+                <label>请求格式（JSON 模板）</label>
+                <textarea name="request_template" rows="8" data-request-template><%= p.request_template %></textarea>
+                <p class="muted small">
+                  可用占位符：{{model}}、{{messages}}、{{temperature}}、{{max_tokens}}、{{stream}}、{{tools}}、{{tool_choice}}、{{prompt}}。
+                  POST 时模板作为 JSON 请求体；GET 时模板的每个字段会转成查询参数。留空使用默认模板。
+                </p>
+                <label>输出条目</label>
+                <input name="output_path" data-output-path value="<%= p.output_path %>" placeholder="例如：choices.0.message.content">
+                <textarea rows="4" data-response-sample placeholder="可选：粘贴一段该接口的真实响应 JSON，点下面的按钮解析出可选条目"></textarea>
+                <p style="margin:8px 0"><button type="button" class="light" data-parse-response>解析响应并选择输出条目</button></p>
+                <select data-output-options hidden></select>
+                <p class="muted small" data-parse-message></p>
+              </div>
+
+              <label>文本模型</label><textarea name="models" rows="3"><%= p.model_list.join('\n') %></textarea>
+              <label>识图模型</label><textarea name="vision_models" rows="2"><%= p.vision_model_list.join('\n') %></textarea>
+              <label>多模态模型</label><textarea name="multimodal_models" rows="2"><%= p.multimodal_model_list.join('\n') %></textarea>
+              <label>生图模型</label><textarea name="image_models" rows="2"><%= p.image_model_list.join('\n') %></textarea>
+              <label>语音模型</label><textarea name="speech_models" rows="2"><%= p.speech_model_list.join('\n') %></textarea>
+              <label>语音识别模型</label><textarea name="asr_models" rows="2"><%= p.asr_model_list.join('\n') %></textarea>
+              <p style="margin-top:8px"><button class="light" type="submit">保存</button></p>
+            </form>
+            <form method="post" action="/providers/<%= p.id %>/delete" data-confirm="确认删除供应商 <%= p.name %>？">
+              <button class="danger" type="submit">删除</button>
+            </form>
+          </details>
+        </td>
+      </tr>
+    <% }); %>
+    <% if (!providers.length) { %>
+      <tr><td colspan="9" class="muted">尚未配置供应商</td></tr>
+    <% } %>
+  </tbody>
+</table>
+
+<script>
+(function () {
+  var DEFAULT_POST = '{\n  "model": {{model}},\n  "messages": {{messages}},\n  "temperature": {{temperature}},\n  "max_tokens": {{max_tokens}}\n}';
+  var DEFAULT_GET = '{\n  "model": {{model}},\n  "messages": {{messages}}\n}';
+
+  function collectPaths(value, prefix, out, depth) {
+    if (depth > 12) return;
+    if (Array.isArray(value)) {
+      value.forEach(function (item, index) {
+        collectPaths(item, prefix ? prefix + '.' + index : String(index), out, depth + 1);
+      });
+      return;
+    }
+    if (value && typeof value === 'object') {
+      Object.keys(value).forEach(function (key) {
+        collectPaths(value[key], prefix ? prefix + '.' + key : key, out, depth + 1);
+      });
+      return;
+    }
+    if (typeof value === 'string') {
+      out.push({
+        path: prefix,
+        preview: value.length > 60 ? value.slice(0, 60) + '…' : value
+      });
+    }
+  }
+
+  function setupForm(form) {
+    var typeSelect = form.querySelector('[data-provider-type]');
+    var customFields = form.querySelector('[data-custom-fields]');
+    var methodSelect = form.querySelector('[data-http-method]');
+    var templateInput = form.querySelector('[data-request-template]');
+    var baseUrl = form.querySelector('[data-base-url]');
+    var hint = form.querySelector('[data-type-hint]');
+    var outputPath = form.querySelector('[data-output-path]');
+    var sample = form.querySelector('[data-response-sample]');
+    var parseButton = form.querySelector('[data-parse-response]');
+    var options = form.querySelector('[data-output-options]');
+    var message = form.querySelector('[data-parse-message]');
+
+    function currentType() {
+      return typeSelect ? typeSelect.value : 'openai';
+    }
+
+    function refreshType() {
+      var type = currentType();
+      var isCustom = type === 'custom';
+      if (customFields) customFields.hidden = !isCustom;
+      if (baseUrl) {
+        baseUrl.placeholder = isCustom
+          ? 'https://example.com/api/generate'
+          : (type === 'deepseek' ? 'https://api.deepseek.com' : 'https://api.openai.com/v1');
+      }
+      if (hint) {
+        if (type === 'deepseek') {
+          hint.textContent = 'DeepSeek 兼容：接口地址例如 https://api.deepseek.com，平台自动补 /chat/completions。';
+        } else if (type === 'openai') {
+          hint.textContent = 'OpenAI 兼容：接口地址填写到版本号，例如 https://api.openai.com/v1，平台自动补 /chat/completions。';
+        } else {
+          hint.textContent = '自定义接口：接口地址按原样请求，不再自动补路径。下方可编辑 GET/POST 请求格式并指定输出条目。';
+        }
+      }
+      if (isCustom && templateInput && !templateInput.value.trim()) {
+        templateInput.value = methodSelect && methodSelect.value === 'GET' ? DEFAULT_GET : DEFAULT_POST;
+      }
+    }
+
+    if (typeSelect) typeSelect.addEventListener('change', refreshType);
+    if (methodSelect) {
+      methodSelect.addEventListener('change', function () {
+        if (!templateInput) return;
+        var value = templateInput.value.trim();
+        if (!value || value === DEFAULT_POST.trim() || value === DEFAULT_GET.trim()) {
+          templateInput.value = methodSelect.value === 'GET' ? DEFAULT_GET : DEFAULT_POST;
+        }
+      });
+    }
+
+    if (parseButton) {
+      parseButton.addEventListener('click', function () {
+        if (message) message.textContent = '';
+        var text = sample ? sample.value.trim() : '';
+        if (!text) {
+          if (message) message.textContent = '请先粘贴响应 JSON。';
+          return;
+        }
+        var data;
+        try {
+          data = JSON.parse(text);
+        } catch (error) {
+          if (message) message.textContent = '响应不是合法 JSON：' + error.message;
+          return;
+        }
+        var paths = [];
+        collectPaths(data, '', paths, 0);
+        if (!paths.length) {
+          if (message) message.textContent = '没有找到可用的字符串条目。';
+          return;
+        }
+        options.innerHTML = '';
+        var placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = '选择输出条目…';
+        options.appendChild(placeholder);
+        paths.forEach(function (item) {
+          var option = document.createElement('option');
+          option.value = item.path;
+          option.textContent = item.path + '  ·  ' + item.preview;
+          options.appendChild(option);
+        });
+        options.hidden = false;
+        if (message) message.textContent = '共 ' + paths.length + ' 个可选条目。';
+      });
+    }
+
+    if (options) {
+      options.addEventListener('change', function () {
+        if (options.value && outputPath) outputPath.value = options.value;
+      });
+    }
+
+    refreshType();
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('[data-provider-form]'), setupForm);
+})();
+</script>
+
+<%- include('partials/footer') %>

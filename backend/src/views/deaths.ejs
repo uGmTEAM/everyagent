@@ -1,0 +1,38 @@
+<%- include('partials/header') %>
+
+<h1>死亡档案</h1>
+
+<table>
+  <thead>
+    <tr><th>AI</th><th>原因</th><th>最终余额</th><th>模型</th><th>归档文件</th><th>大小</th><th>死亡时间</th><th>操作</th></tr>
+  </thead>
+  <tbody>
+    <% deaths.forEach(function (d) { %>
+      <tr>
+        <td><a href="/agents/<%= d.agent_id %>"><%= d.agent_id %></a></td>
+        <td><%= d.reason %></td>
+        <td class="right"><%= fmtInt(d.balance) %></td>
+        <td><%= d.model || '' %></td>
+        <td><%= d.zip_name %></td>
+        <td class="right"><%= fmtBytes(d.zip_size) %></td>
+        <td class="nowrap"><%= fmtDate(d.created_at) %></td>
+        <td>
+          <% if (d.zip_exists) { %>
+            <a class="btn light" href="/deaths/<%= d.agent_id %>/download">下载</a>
+          <% } else { %>
+            <span class="muted">缺失</span>
+          <% } %>
+        </td>
+      </tr>
+    <% }); %>
+    <% if (!deaths.length) { %>
+      <tr><td colspan="8" class="muted">暂无死亡档案</td></tr>
+    <% } %>
+  </tbody>
+</table>
+
+<p class="muted small">
+  归档包含工作区、私有知识库、记忆文件和该 AI 的数据库记录。其他 AI 不会收到死亡通知。
+</p>
+
+<%- include('partials/footer') %>

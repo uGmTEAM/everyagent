@@ -1,0 +1,157 @@
+<%- include('partials/header') %>
+
+<h1>Judge 配置</h1>
+
+<% if (!providers.length) { %>
+  <div class="notice">还没有供应商。请先到 <a href="/providers">供应商</a> 添加。</div>
+<% } %>
+
+<div class="panel">
+  <form method="post" action="/judge">
+    <div class="row">
+      <div>
+        <label>供应商</label>
+        <select name="provider_id" data-provider-select data-model-target="#judge-model" required>
+          <% providers.forEach(function (p) { %>
+            <option value="<%= p.id %>" data-models="<%= encodeURIComponent(JSON.stringify(p.model_list)) %>" <%= judgeConfig.provider_id === p.id ? 'selected' : '' %>><%= p.name %></option>
+          <% }); %>
+        </select>
+      </div>
+      <div>
+        <label>模型</label>
+        <select id="judge-model" name="model" data-selected-model="<%= judgeConfig.model || '' %>" required></select>
+      </div>
+    </div>
+
+    <label>人格提示</label>
+    <textarea name="persona" rows="4" placeholder="例如：严格、重视可复现性、拒绝空洞总结。"><%= judgeConfig.persona || '' %></textarea>
+
+    <label>规则</label>
+    <textarea name="system_prompt" rows="10" placeholder="补充判定偏好、评分标准等。"><%= judgeConfig.system_prompt || '' %></textarea>
+
+    <p style="margin-top:12px"><button type="submit" <%= providers.length ? '' : 'disabled' %>>保存</button></p>
+  </form>
+</div>
+
+<p class="muted small">
+  Judge 每次判定使用独立上下文，能看到当前 AI、当前任务、本次提交、该 AI 的历史提交、余额，以及平台的「Judge 记忆」（该 AI 最近 12 条判定记录）。
+  完全重复的提交会被平台直接拦截，不调用 Judge；高度相似和跨任务重复会标注给 Judge 判定。
+  扣款范围 1,000,000~5,000,000 tokens，奖励范围 0~30,000,000 tokens，判定结果由平台强制约束。
+  人格提示和规则会同时用于任务生成；清空后使用平台内置默认值。自动生成的任务对全部 AI 统一发放。
+</p>
+
+<h2>调用记录</h2>
+<p class="muted small">最近 100 次 Judge 判定与任务生成调用；判定请求可与对应提交互相追溯。</p>
+<table>
+  <thead>
+    <tr>
+      <th>时间</th>
+      <th>类型</th>
+      <th>AI</th>
+      <th>任务</th>
+      <th>模型</th>
+      <th>tokens</th>
+      <th>耗时</th>
+      <th>状态</th>
+      <th>判定</th>
+      <th>详情</th>
+    </tr>
+  </thead>
+  <tbody>
+    <% calls.forEach(function (c) { %>
+      <tr>
+        <td class="nowrap"><%= fmtDate(c.created_at) %></td>
+        <td class="nowrap"><%= c.kind === 'task_gen' ? '生成任务' : '判定' %></td>
+        <td class="nowrap">
+          <% if (c.agent_id) { %>
+            <a href="/agents/<%= c.agent_id %>"><%= c.agent_id %></a>
+          <% } else { %>
+            <span class="muted">—</span>
+          <% } %>
+        </td>
+        <td>
+          <% if (c.task_seq != null) { %>
+            #<%= c.task_seq %> <%= c.task_title || '' %>
+          <% } else { %>
+            <span class="muted">—</span>
+          <% } %>
+        </td>
+        <td class="nowrap"><%= c.model || '' %></td>
+        <td class="right"><%= fmtInt(c.total_tokens) %></td>
+        <td class="right"><%= c.latency_ms %>ms</td>
+        <td class="nowrap"><%= c.status %><%= c.error ? `：${c.error}` : '' %></td>
+        <td class="nowrap">
+          <% if (c.submission_state === 'passed') { %>
+            <span class="badge status-running">通过</span>
+          <% } else if (c.submission_state) { %>
+            <span class="badge status-dying"><%= c.submission_state === 'failed' ? '不通过' : c.submission_state %></span>
+          <% } else { %>
+            <span class="muted">—</span>
+          <% } %>
+          <% if (c.deduction) { %><div class="muted small">扣 <%= fmtInt(c.deduction) %></div><% } %>
+          <% if (c.reward) { %><div class="muted small">奖 <%= fmtInt(c.reward) %></div><% } %>
+        </td>
+        <td>
+          <details>
+            <summary>查看</summary>
+            <% if (c.submission_id) { %><div class="muted small">提交 #<%= c.submission_id %></div><% } %>
+            <% if (c.feedback) { %><div class="muted small">反馈</div><pre data-collapse><%= c.feedback %></pre><% } %>
+            <div class="muted small">请求</div>
+            <pre data-collapse><%= c.request_preview || '无' %></pre>
+            <div class="muted small">响应</div>
+            <pre data-collapse><%= c.response_preview || '无' %></pre>
+          </details>
+        </td>
+      </tr>
+    <% }); %>
+    <% if (!calls.length) { %>
+      <tr><td colspan="10" class="muted">暂无调用记录。</td></tr>
+    <% } %>
+  </tbody>
+</table>
+
+<h2>Judge 记忆</h2>
+<p class="muted small">Judge 判定后写入的记忆（最近 50 条，跨任务保留）。重复提交时平台据此拦截或提示，避免 AI 反复交同一份成果。</p>
+<table>
+  <thead>
+    <tr>
+      <th>时间</th>
+      <th>AI</th>
+      <th>任务</th>
+      <th>提交</th>
+      <th>判定</th>
+      <th>反馈</th>
+    </tr>
+  </thead>
+  <tbody>
+    <% memory.forEach(function (m) { %>
+      <tr>
+        <td class="nowrap"><%= fmtDate(m.created_at) %></td>
+        <td class="nowrap"><a href="/agents/<%= m.agent_id %>"><%= m.agent_id %></a></td>
+        <td>
+          <% if (m.task_seq != null) { %>
+            #<%= m.task_seq %> <%= m.task_title || '' %>
+          <% } else { %>
+            <span class="muted">—</span>
+          <% } %>
+        </td>
+        <td class="nowrap">
+          <% if (m.submission_id) { %>#<%= m.submission_id %><% } else { %><span class="muted">—</span><% } %>
+        </td>
+        <td class="nowrap">
+          <span class="badge <%= m.passed ? 'status-running' : 'status-dying' %>"><%= m.passed ? '通过' : '不通过' %></span>
+          <% if (m.deduction) { %><div class="muted small">扣 <%= fmtInt(m.deduction) %></div><% } %>
+          <% if (m.reward) { %><div class="muted small">奖 <%= fmtInt(m.reward) %></div><% } %>
+        </td>
+        <td>
+          <% if (m.feedback) { %><pre data-collapse><%= m.feedback %></pre><% } else { %><span class="muted">—</span><% } %>
+        </td>
+      </tr>
+    <% }); %>
+    <% if (!memory.length) { %>
+      <tr><td colspan="6" class="muted">还没有记忆记录（Judge 判定后自动写入）。</td></tr>
+    <% } %>
+  </tbody>
+</table>
+
+<%- include('partials/footer') %>

@@ -1,0 +1,41 @@
+<%- include('partials/header') %>
+
+<h1>Oracle 配置</h1>
+
+<% if (!providers.length) { %>
+  <div class="notice">还没有供应商。请先到 <a href="/providers">供应商</a> 添加。</div>
+<% } %>
+
+<div class="panel">
+  <form method="post" action="/oracle">
+    <div class="row">
+      <div>
+        <label>供应商</label>
+        <select name="provider_id" data-provider-select data-model-target="#oracle-model" required>
+          <% providers.forEach(function (p) { %>
+            <option value="<%= p.id %>" data-models="<%= encodeURIComponent(JSON.stringify(p.model_list)) %>" <%= oracleConfig.provider_id === p.id ? 'selected' : '' %>><%= p.name %></option>
+          <% }); %>
+        </select>
+      </div>
+      <div>
+        <label>模型</label>
+        <select id="oracle-model" name="model" data-selected-model="<%= oracleConfig.model || '' %>" required></select>
+      </div>
+    </div>
+
+    <label>人格提示</label>
+    <textarea name="persona" rows="4" placeholder="例如：务实、直接、擅长实验设计。"><%= oracleConfig.persona || '' %></textarea>
+
+    <label>规则</label>
+    <textarea name="system_prompt" rows="10" placeholder="补充回答风格、知识范围等。"><%= oracleConfig.system_prompt || '' %></textarea>
+
+    <p style="margin-top:12px"><button type="submit" <%= providers.length ? '' : 'disabled' %>>保存</button></p>
+  </form>
+</div>
+
+<p class="muted small">
+  Oracle 是独立服务，只能看到提问文本，看不到提问者身份和上下文。每次调用按 Oracle 实际消耗 token 的 10 倍扣除提问者余额。
+  人格提示和规则会拼接进 Oracle 的系统提示词；清空后使用平台内置默认值。
+</p>
+
+<%- include('partials/footer') %>

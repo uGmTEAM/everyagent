@@ -1,0 +1,442 @@
+<%- include('partials/header') %>
+
+<h1><%= agent.id %> <span class="badge <%= statusClass(agent.status) %>"><%= statusText(agent.status) %></span></h1>
+
+<div class="grid">
+  <div class="stat"><div class="k">余额</div><div class="v"><%= agent.unlimited_tokens ? '无限' : fmtInt(agent.balance) %></div></div>
+  <div class="stat"><div class="k">初始额度</div><div class="v"><%= agent.unlimited_tokens ? '无限' : fmtInt(agent.initial_balance) %></div></div>
+  <div class="stat"><div class="k">累计请求</div><div class="v"><%= fmtInt(usage.requests) %></div></div>
+  <div class="stat"><div class="k">累计 tokens</div><div class="v"><%= fmtInt(usage.tokens) %></div></div>
+  <div class="stat"><div class="k">工作区占用</div><div class="v"><%= disk.text %></div></div>
+  <div class="stat"><div class="k">崩溃计数</div><div class="v"><%= agent.crash_attempts %> / <%= crashLimit === null ? '∞' : crashLimit %></div></div>
+</div>
+
+<div class="panel">
+  <div class="kv">
+    <div class="k">研究目标</div><div><%= agent.goal %></div>
+    <% if (agent.persona) { %>
+      <div class="k">人格</div><div><details><summary>查看</summary><pre><%= agent.persona %></pre></details></div>
+    <% } %>
+    <% if (agent.prompt_mode === 'file') { %>
+      <div class="k">规则</div><div>/PLATFORM_RULES.md（容器根目录，AI 可随时读取）</div>
+    <% } %>
+    <div class="k">模型</div><div><%= agent.model %></div>
+    <div class="k">供应商</div><div><%= agent.provider_name || '未配置' %></div>
+    <div class="k">外网</div><div><%= agent.allow_internet ? '允许' : '禁止' %></div>
+    <div class="k">额度模式</div><div><%= agent.unlimited_tokens ? '无限（不会因余额死亡）' : '有限' %></div>
+    <div class="k">虚拟屏</div><div><%= agent.enable_screen ? '已启用（noVNC）' : '未启用' %></div>
+    <div class="k">识图</div><div><%= visionText %></div>
+    <div class="k">任务模式</div><div><%= agent.manual_tasks ? '仅手动（管理员下发）' : '自动（Judge 生成）' %></div>
+    <% if (agent.extra_rules) { %>
+      <div class="k">补充规则</div><div><details><summary>查看</summary><pre><%= agent.extra_rules %></pre></details></div>
+    <% } %>
+    <div class="k">当前任务</div><div><%= currentTask ? `#${currentTask.seq} ${currentTask.title}` : '无' %></div>
+    <div class="k">容器</div><div><%= agent.container_id ? agent.container_id.slice(0, 16) : '未创建' %></div>
+    <div class="k">创建时间</div><div><%= fmtDate(agent.created_at) %></div>
+    <% if (agent.dying_deadline) { %>
+      <div class="k">临终截止</div><div><%= fmtDate(agent.dying_deadline) %></div>
+    <% } %>
+    <% if (agent.died_at) { %>
+      <div class="k">死亡时间</div><div><%= fmtDate(agent.died_at) %>（<%= agent.death_reason %>）</div>
+    <% } %>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <% if (agent.status === 'created') { %>
+      <form class="shrink" method="post" action="/agents/<%= agent.id %>/start"><button class="light">启动容器</button></form>
+    <% } %>
+    <% if (agent.status !== 'dead' && agent.status !== 'finalizing') { %>
+      <form class="shrink" method="post" action="/agents/<%= agent.id %>/restart"><button class="light">重启容器</button></form>
+    <% } %>
+    <% if (agent.status === 'paused_disk') { %>
+      <form class="shrink" method="post" action="/agents/<%= agent.id %>/resume"><button class="light">从磁盘暂停恢复</button></form>
+    <% } %>
+    <% if (!agent.unlimited_tokens) { %>
+      <form class="shrink inline" method="post" action="/agents/<%= agent.id %>/recharge">
+        <input type="number" name="amount" min="1" step="1" placeholder="充值 tokens" style="width:180px">
+        <button class="light">充值</button>
+      </form>
+    <% } else { %>
+      <span class="muted small">无限额度，无需充值</span>
+    <% } %>
+  </div>
+</div>
+
+<% if (warnings.length) { %>
+  <div class="notice">余额预警：当前处于 <%= warnings.join(' / ') %> 阈值以下。</div>
+<% } %>
+
+<% var crashSource = agent.crash_unlimited ? '管理员设为无限' : (agent.crash_max_retries == null ? '平台默认' : '管理员设置'); %>
+<div class="panel">
+  <h3>AI 设置</h3>
+  <% if (crashError) { %>
+    <div class="notice error"><%= crashError %></div>
+  <% } %>
+  <div class="kv">
+    <div class="k">崩溃重启上限</div><div><%= crashLimit === null ? '无限' : `${crashLimit} 次` %>（<%= crashSource %>）</div>
+    <div class="k">当前崩溃计数</div><div><%= agent.crash_attempts %></div>
+  </div>
+  <form class="row" method="post" action="/agents/<%= agent.id %>/crash-limit" style="margin-top:12px">
+    <div><label>提高到（只能增加）</label><input type="number" name="limit" min="1" step="1" placeholder="例如 5" <%= crashLimit === null ? 'disabled' : '' %>></div>
+    <div class="checks" style="align-self:flex-end">
+      <label class="check"><input type="checkbox" name="unlimited" value="1" <%= crashLimit === null ? 'disabled' : '' %>>改为无限</label>
+    </div>
+    <div class="shrink"><button class="light" type="submit" <%= agent.status === 'dead' || agent.status === 'finalizing' ? 'disabled' : '' %>>保存上限</button></div>
+  </form>
+  <form class="row" method="post" action="/agents/<%= agent.id %>/crash-reset" style="margin-top:8px">
+    <div class="shrink"><button class="light" type="submit" <%= agent.status === 'dead' || agent.status === 'finalizing' ? 'disabled' : '' %>>重置崩溃计数</button></div>
+  </form>
+  <p class="muted small">崩溃重启上限只能增加或改为无限，不能减少。修改上限、重置计数和充值都会通过平台通知告知 AI。</p>
+
+  <% var cleanOnRestart = Number(agent.clean_on_restart || 0) === 1; %>
+  <form method="post" action="/agents/<%= agent.id %>/clean-on-restart" style="margin-top:14px;border-top:1px solid var(--line,#333);padding-top:12px">
+    <div class="kv">
+      <div class="k">重启/重建策略</div>
+      <div><%= cleanOnRestart ? '清理容器后重建（容器内改动会丢失）' : '复用现有容器（保留容器内改动）' %></div>
+    </div>
+    <div class="checks" style="margin-top:8px">
+      <label class="check">
+        <input type="checkbox" name="enabled" value="1" <%= cleanOnRestart ? 'checked' : '' %>>
+        重启或重建时清理容器（工作区始终保留）
+      </label>
+    </div>
+    <div class="shrink" style="margin-top:8px"><button class="light" type="submit">保存策略</button></div>
+  </form>
+  <p class="muted small">关闭（默认）时，「重启容器」只停止再启动现有容器，容器里安装的软件、登录会话等都会保留；开启后会删除容器并重新创建，工作区（/workspace）不受影响。</p>
+
+  <% if (modelError) { %>
+    <div class="notice error"><%= modelError %></div>
+  <% } %>
+  <form method="post" action="/agents/<%= agent.id %>/models" style="margin-top:14px;border-top:1px solid var(--line,#333);padding-top:12px">
+    <div class="kv">
+      <div class="k">当前主模型</div>
+      <div><%= agent.provider_name || '—' %> / <%= agent.model %></div>
+      <div class="k">当前副模型</div>
+      <div><%= agent.fallback_model ? `${fallbackProviderName || '未知供应商'} / ${agent.fallback_model}` : '未设置' %></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <div>
+        <label>主模型供应商</label>
+        <select name="provider_id">
+          <% providerList.forEach(function (p) { %>
+            <option value="<%= p.id %>" <%= p.id === agent.provider_id ? 'selected' : '' %>><%= p.name %></option>
+          <% }); %>
+        </select>
+      </div>
+      <div><label>主模型</label><input name="model" value="<%= agent.model %>" required></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div>
+        <label>副模型供应商（主模型不可用时自动切换）</label>
+        <select name="fallback_provider_id">
+          <option value="">不设置</option>
+          <% providerList.forEach(function (p) { %>
+            <option value="<%= p.id %>" <%= p.id === agent.fallback_provider_id ? 'selected' : '' %>><%= p.name %></option>
+          <% }); %>
+        </select>
+      </div>
+      <div><label>副模型</label><input name="fallback_model" value="<%= agent.fallback_model || '' %>"></div>
+    </div>
+    <p class="muted small">
+      可选模型：
+      <% providerList.forEach(function (p) { %><%= p.name %>（<%= p.models %>）；<% }); %>
+    </p>
+    <div class="shrink"><button type="submit" <%= agent.status === 'dead' || agent.status === 'finalizing' ? 'disabled' : '' %>>保存并重启容器</button></div>
+  </form>
+</div>
+
+<div class="tabs">
+  <a href="?tab=conversation" class="<%= tab === 'conversation' ? 'on' : '' %>">对话</a>
+  <a href="?tab=terminal" class="<%= tab === 'terminal' ? 'on' : '' %>">终端</a>
+  <% if (agent.enable_screen) { %>
+    <a href="?tab=screen" class="<%= tab === 'screen' ? 'on' : '' %>">屏幕</a>
+  <% } %>
+  <a href="?tab=files" class="<%= tab === 'files' ? 'on' : '' %>">文件</a>
+  <a href="?tab=kb" class="<%= tab === 'kb' ? 'on' : '' %>">知识库</a>
+  <a href="?tab=tasks" class="<%= tab === 'tasks' ? 'on' : '' %>">任务</a>
+  <a href="?tab=message" class="<%= tab === 'message' ? 'on' : '' %>">留言</a>
+  <a href="?tab=usage" class="<%= tab === 'usage' ? 'on' : '' %>">额度</a>
+  <a href="?tab=events" class="<%= tab === 'events' ? 'on' : '' %>">事件</a>
+</div>
+
+<% if (tab === 'terminal') { %>
+  <div class="log-toolbar">
+    <button id="terminal-copy" class="light" type="button">复制终端日志</button>
+  </div>
+  <pre id="terminal" class="terminal" data-agent="<%= agent.id %>">连接日志中...</pre>
+  <p class="muted small">日志来自容器 stdout/stderr，最多保留最近 3000 行。</p>
+<% } %>
+
+<% if (tab === 'screen') { %>
+  <% if (!agent.enable_screen) { %>
+    <div class="notice">该 AI 未启用虚拟屏。</div>
+  <% } else if (agent.status === 'dead') { %>
+    <div class="notice">该 AI 已死亡，虚拟屏不可用。</div>
+  <% } else if (agent.status === 'finalizing') { %>
+    <div class="notice">该 AI 正在归档，虚拟屏不可用。</div>
+  <% } else if (!agent.container_id || agent.status === 'created') { %>
+    <div class="notice">容器尚未启动，虚拟屏不可用。请先启动容器。</div>
+  <% } else { %>
+    <div class="panel">
+      <p class="muted small">noVNC 仅监听 127.0.0.1，可直接在下方操作，也可以在新窗口打开。</p>
+      <iframe class="novnc-frame" src="<%= noVncUrl %>" title="noVNC"></iframe>
+      <p><a href="<%= noVncUrl %>" target="_blank" rel="noopener">在新窗口打开 noVNC</a></p>
+    </div>
+  <% } %>
+<% } %>
+
+<% if (tab === 'conversation') { %>
+  <% if (!requests.length) { %>
+    <div class="panel">暂无请求。</div>
+  <% } else { %>
+    <table>
+      <thead><tr><th>时间</th><th>类型</th><th>模型</th><th>tokens</th><th>计费</th><th>耗时</th><th>状态</th><th>详情</th></tr></thead>
+      <tbody>
+        <% requests.forEach(function (r) { %>
+          <tr>
+            <td class="nowrap"><%= fmtDate(r.created_at) %></td>
+            <td class="nowrap"><%= r.kind %></td>
+            <td class="nowrap"><%= r.model || '' %></td>
+            <td class="right"><%= fmtInt(r.total_tokens) %></td>
+            <td class="right"><%= fmtInt(r.billed_tokens) %></td>
+            <td class="right"><%= r.latency_ms %>ms</td>
+            <td class="nowrap"><%= r.status %><%= r.error ? `：${r.error}` : '' %></td>
+            <td>
+              <details>
+                <summary>查看</summary>
+                <div class="muted small">请求</div>
+                <pre data-collapse><%= r.request_preview %></pre>
+                <div class="muted small">响应</div>
+                <pre data-collapse><%= r.response_preview %></pre>
+              </details>
+            </td>
+          </tr>
+        <% }); %>
+      </tbody>
+    </table>
+  <% } %>
+<% } %>
+
+<% if (tab === 'files') { %>
+  <div class="panel">
+    <h3>上传文件 / 追加规则</h3>
+    <% if (uploadError) { %>
+      <div class="notice error">上传失败：<%= uploadError %></div>
+    <% } %>
+    <form method="post" action="/agents/<%= agent.id %>/upload" enctype="multipart/form-data">
+      <input type="file" name="files" multiple>
+      <label>上传注释（可选）</label>
+      <textarea name="note" rows="3" placeholder="例如：这是新的背景资料，请先阅读摘要，再继续当前任务。"></textarea>
+      <label>补充规则（可选）</label>
+      <textarea name="extra_rules" rows="3" placeholder="例如：以后所有实验记录必须同时写入 /workspace/notes/。"></textarea>
+      <p class="muted small">文件保存到 /workspace/uploads/时间戳/，注释会写成同目录的 README.md 并作为平台通知告知 AI；补充规则会追加到平台规则，并通过平台通知立即生效。</p>
+      <button type="submit">上传</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <div class="tabs" style="margin-top:0">
+      <a href="?tab=files&root=workspace" class="<%= fileRoot === 'workspace' ? 'on' : '' %>">私有工作区 /workspace</a>
+      <a href="?tab=files&root=shared" class="<%= fileRoot === 'shared' ? 'on' : '' %>">临时工作区 /tmp_workspace</a>
+    </div>
+    <div class="crumbs">
+      <a href="?tab=files&root=<%= fileRoot %>&path=">根目录</a>
+      <% if (filePath) { %>
+        <% if (parentPath !== null) { %>
+          <a href="?tab=files&root=<%= fileRoot %>&path=<%= encodeURIComponent(parentPath) %>">上一级</a>
+        <% } %>
+        <span class="muted">/ <%= filePath %></span>
+      <% } %>
+    </div>
+    <% if (fileError) { %>
+      <div class="notice error"><%= fileError %></div>
+    <% } %>
+    <table>
+      <thead><tr><th>名称</th><th>类型</th><th>大小</th></tr></thead>
+      <tbody>
+        <% files.forEach(function (f) { %>
+          <% var childPath = filePath ? `${filePath}/${f.name}` : f.name; %>
+          <tr>
+            <td>
+              <% if (f.isDir) { %>
+                <a href="?tab=files&root=<%= fileRoot %>&path=<%= encodeURIComponent(childPath) %>"><%= f.name %></a>
+              <% } else { %>
+                <a href="/agents/<%= agent.id %>/file?root=<%= fileRoot %>&path=<%= encodeURIComponent(childPath) %>"><%= f.name %></a>
+              <% } %>
+            </td>
+            <td><%= f.isDir ? '目录' : '文件' %></td>
+            <td><%= f.isDir ? '' : fmtBytes(f.size) %></td>
+          </tr>
+        <% }); %>
+        <% if (!files.length) { %>
+          <tr><td colspan="3" class="muted">空目录</td></tr>
+        <% } %>
+      </tbody>
+    </table>
+  </div>
+<% } %>
+
+<% if (tab === 'kb') { %>
+  <div class="panel">
+    <h3>私有知识库</h3>
+    <% if (!kb.length) { %>
+      <p class="muted">尚未建立知识库。AI 可以调用 kb_ingest 将文件写入知识库。</p>
+    <% } else { %>
+      <table>
+        <thead><tr><th>名称</th><th>切片数</th><th>来源</th><th>创建时间</th></tr></thead>
+        <tbody>
+          <% kb.forEach(function (k) { %>
+            <tr>
+              <td><%= k.name %></td>
+              <td class="right"><%= fmtInt(k.chunks) %></td>
+              <td><%= (k.sources || []).join(', ') %></td>
+              <td class="nowrap"><%= fmtDate(k.createdAt) %></td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+  <div class="panel">
+    <h3>追加单独语料</h3>
+    <form method="post" action="/agents/<%= agent.id %>/corpus" enctype="multipart/form-data">
+      <input type="file" name="corpus" multiple required>
+      <p class="muted small">文件会放入 /workspace/corpus/，不会自动建立索引。</p>
+      <button type="submit">上传</button>
+    </form>
+  </div>
+<% } %>
+
+<% if (tab === 'message') { %>
+  <div class="panel">
+    <h3>给 AI 留言</h3>
+    <% if (messageError) { %>
+      <div class="notice error"><%= messageError %></div>
+    <% } %>
+    <form method="post" action="/agents/<%= agent.id %>/message">
+      <textarea name="content" rows="5" required placeholder="例如：优先完成当前任务；今晚平台会暂停，请把关键数据写入 /workspace/notes/。"></textarea>
+      <p class="muted small">留言会立即为 AI 补偿 <%= fmtInt(messageCompensation) %> tokens，并在它下一次获取运行时状态时强制唤醒（包括暂停中的 AI），作为「平台通知」送达，只送达一次。AI 死亡或归档后不能留言。</p>
+      <button type="submit">发送留言</button>
+    </form>
+  </div>
+
+  <h3>留言记录</h3>
+  <table>
+    <thead><tr><th>时间</th><th>内容</th><th>状态</th></tr></thead>
+    <tbody>
+      <% adminMessages.forEach(function (m) { %>
+        <tr>
+          <td class="nowrap"><%= fmtDate(m.created_at) %></td>
+          <td><pre data-collapse><%= m.content %></pre></td>
+          <td class="nowrap"><%= m.delivered_at ? `已送达 ${fmtDate(m.delivered_at)}` : '待送达' %></td>
+        </tr>
+      <% }); %>
+      <% if (!adminMessages.length) { %>
+        <tr><td colspan="3" class="muted">暂无留言</td></tr>
+      <% } %>
+    </tbody>
+  </table>
+<% } %>
+
+<% if (tab === 'tasks') { %>
+  <div class="panel">
+    <% if (currentTask) { %>
+      <div class="kv">
+        <div class="k">当前任务</div><div>#<%= currentTask.seq %> <%= currentTask.title %></div>
+        <div class="k">描述</div><div><%= currentTask.description %></div>
+        <div class="k">验收标准</div><div><%= currentTask.acceptance %></div>
+      </div>
+    <% } else { %>
+      <p class="muted"><%= agent.manual_tasks ? '当前没有任务。该 AI 为仅手动模式，等待管理员在任务页添加任务。' : '当前没有任务。等待 Judge 生成任务。' %></p>
+    <% } %>
+  </div>
+  <h3>任务进度</h3>
+  <table>
+    <thead><tr><th>序号</th><th>标题</th><th>类型</th><th>状态</th><th>尝试</th><th>完成次数</th><th>完成时间</th></tr></thead>
+    <tbody>
+      <% progress.forEach(function (t) { %>
+        <tr>
+          <td><%= t.seq %></td>
+          <td><%= t.title %></td>
+          <td class="nowrap"><%= t.long_term ? '长期' : '一次性' %></td>
+          <td><%= t.long_term ? (t.completions > 0 ? '已完成' : '待完成') : (t.agent_status === 'passed' ? '已通过' : '待完成') %></td>
+          <td class="right"><%= t.attempts %></td>
+          <td class="right"><%= t.completions || 0 %></td>
+          <td class="nowrap"><%= fmtDate(t.completed_at) %></td>
+        </tr>
+      <% }); %>
+      <% if (!progress.length) { %>
+        <tr><td colspan="7" class="muted">暂无任务</td></tr>
+      <% } %>
+    </tbody>
+  </table>
+
+  <h3>提交记录</h3>
+  <table>
+    <thead><tr><th>时间</th><th>任务</th><th>结果</th><th>扣款</th><th>奖励</th><th>反馈</th></tr></thead>
+    <tbody>
+      <% submissions.forEach(function (s) { %>
+        <tr>
+          <td class="nowrap"><%= fmtDate(s.created_at) %></td>
+          <td>#<%= s.task_seq %> <%= s.task_title || '' %></td>
+          <td><%= s.state %></td>
+          <td class="right"><%= fmtInt(s.deduction) %></td>
+          <td class="right"><%= fmtInt(s.reward) %></td>
+          <td><details><summary>查看</summary><pre data-collapse><%= s.feedback || '' %></pre></details></td>
+        </tr>
+      <% }); %>
+      <% if (!submissions.length) { %>
+        <tr><td colspan="6" class="muted">暂无提交</td></tr>
+      <% } %>
+    </tbody>
+  </table>
+<% } %>
+
+<% if (tab === 'usage') { %>
+  <div class="grid">
+    <div class="stat"><div class="k">请求</div><div class="v"><%= fmtInt(usage.requests) %></div></div>
+    <div class="stat"><div class="k">总 tokens</div><div class="v"><%= fmtInt(usage.tokens) %></div></div>
+    <div class="stat"><div class="k">计费 tokens</div><div class="v"><%= fmtInt(usage.billed) %></div></div>
+    <div class="stat"><div class="k">错误</div><div class="v"><%= fmtInt(usage.errors) %></div></div>
+  </div>
+  <div class="panel">
+    <div class="kv">
+      <div class="k">当前余额</div><div><%= agent.unlimited_tokens ? '无限' : `${fmtInt(agent.balance)} tokens` %></div>
+      <div class="k">初始额度</div><div><%= agent.unlimited_tokens ? '无限' : `${fmtInt(agent.initial_balance)} tokens` %></div>
+      <% if (!agent.unlimited_tokens) { %>
+        <div class="k">10% 预警线</div><div><%= fmtInt(Math.floor(agent.initial_balance * 0.10)) %> tokens</div>
+        <div class="k">5% 预警线</div><div><%= fmtInt(Math.floor(agent.initial_balance * 0.05)) %> tokens</div>
+        <div class="k">1% 预警线</div><div><%= fmtInt(Math.floor(agent.initial_balance * 0.01)) %> tokens</div>
+        <div class="k">已触发预警</div><div><%= warnings.length ? warnings.join(' / ') : '无' %></div>
+      <% } else { %>
+        <div class="k">额度规则</div><div>无限额度，不会因余额归零死亡；消耗仍会统计。</div>
+      <% } %>
+    </div>
+    <% if (!agent.unlimited_tokens) { %>
+      <form class="row" style="margin-top:12px" method="post" action="/agents/<%= agent.id %>/recharge">
+        <div><label>充值 tokens</label><input type="number" name="amount" min="1" step="1" required></div>
+        <div class="shrink"><button type="submit">充值</button></div>
+      </form>
+    <% } %>
+  </div>
+  <p class="muted small">记忆、RAG、上下文压缩不计费。Judge 与 Oracle 的消耗只做统计，不扣 AI 余额；Oracle 调用按 10 倍扣提问者余额。</p>
+<% } %>
+
+<% if (tab === 'events') { %>
+  <table>
+    <thead><tr><th>时间</th><th>类型</th><th>内容</th></tr></thead>
+    <tbody>
+      <% eventList.forEach(function (e) { %>
+        <tr>
+          <td class="nowrap"><%= fmtDate(e.created_at) %></td>
+          <td class="nowrap"><%= e.type %></td>
+          <td><%= e.message %></td>
+        </tr>
+      <% }); %>
+      <% if (!eventList.length) { %>
+        <tr><td colspan="3" class="muted">暂无事件</td></tr>
+      <% } %>
+    </tbody>
+  </table>
+<% } %>
+
+<%- include('partials/footer') %>

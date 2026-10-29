@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><%= title %> · EveryAgent</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">EveryAgent</div>
+  <nav>
+    <a href="/" class="<%= active === 'overview' ? 'on' : '' %>">总览</a>
+    <a href="/inbox" class="<%= active === 'inbox' ? 'on' : '' %>">信息<% if (typeof unreadCount !== 'undefined' && unreadCount > 0) { %><span class="badge"><%= unreadCount %></span><% } %></a>
+    <a href="/agents/new" class="<%= active === 'new' ? 'on' : '' %>">创建 AI</a>
+    <a href="/providers" class="<%= active === 'providers' ? 'on' : '' %>">供应商</a>
+    <a href="/judge" class="<%= active === 'judge' ? 'on' : '' %>">Judge</a>
+    <a href="/oracle" class="<%= active === 'oracle' ? 'on' : '' %>">Oracle</a>
+    <a href="/vision" class="<%= active === 'vision' ? 'on' : '' %>">视觉</a>
+    <a href="/media" class="<%= active === 'media' ? 'on' : '' %>">生图语音</a>
+    <a href="/tasks" class="<%= active === 'tasks' ? 'on' : '' %>">任务表</a>
+    <a href="/corpus" class="<%= active === 'corpus' ? 'on' : '' %>">公共语料</a>
+    <a href="/deaths" class="<%= active === 'deaths' ? 'on' : '' %>">死亡档案</a>
+    <a href="/logs" class="<%= active === 'logs' ? 'on' : '' %>">日志</a>
+    <a href="/stats" class="<%= active === 'stats' ? 'on' : '' %>">统计</a>
+  </nav>
+</header>
+<main>

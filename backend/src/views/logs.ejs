@@ -1,0 +1,56 @@
+<%- include('partials/header') %>
+
+<h1>日志</h1>
+
+<div class="tabs">
+  <a href="/logs?tab=server" class="<%= tab === 'server' ? 'on' : '' %>">服务端日志</a>
+  <a href="/logs?tab=ai&agent=<%= agent %>" class="<%= tab === 'ai' ? 'on' : '' %>">AI 端日志</a>
+</div>
+
+<div class="log-toolbar">
+  <% if (tab === 'ai') { %>
+    <label class="log-field">AI
+      <select id="log-agent">
+        <option value="all" <%= agent === 'all' ? 'selected' : '' %>>全部 AI</option>
+        <% agents.forEach(function (a) { %>
+          <option value="<%= a.id %>" <%= agent === a.id ? 'selected' : '' %>><%= a.id %><%= a.status === 'dead' ? '（已死亡）' : '' %></option>
+        <% }); %>
+      </select>
+    </label>
+  <% } %>
+
+  <label class="log-field">级别
+    <select id="log-level">
+      <option value="info">全部</option>
+      <option value="warn">警告及以上</option>
+      <option value="error">仅错误</option>
+    </select>
+  </label>
+
+  <label class="log-field grow">关键词
+    <input id="log-keyword" placeholder="过滤当前视图">
+  </label>
+
+  <button id="log-pause" class="light" type="button">暂停滚动</button>
+  <button id="log-copy" class="light" type="button">复制当前视图</button>
+  <button id="log-clear" class="light" type="button">清空视图</button>
+
+  <% if (tab === 'ai') { %>
+    <a class="btn light" href="/logs/download?type=ai&agent=<%= agent %>">下载<% if (agent === 'all') { %>全部 AI 日志<% } else { %><%= agent %> 日志<% } %></a>
+  <% } else { %>
+    <a class="btn light" href="/logs/download?type=server">下载服务端日志</a>
+  <% } %>
+</div>
+
+<% if (tab === 'ai' && !agents.length) { %>
+  <div class="notice">还没有 AI，暂无 AI 端日志。</div>
+<% } %>
+
+<pre id="log-view" class="terminal log-view" data-mode="<%= tab %>" data-agent="<%= agent %>"></pre>
+
+<p class="muted small">
+  服务端日志只记录后端 Node 进程的 stdout/stderr；AI 端日志记录容器内 harness 的输出。
+  磁盘日志永久保留，清空视图不会删除磁盘文件。
+</p>
+
+<%- include('partials/footer') %>

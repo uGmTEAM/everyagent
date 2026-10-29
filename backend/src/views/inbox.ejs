@@ -1,0 +1,67 @@
+<%- include('partials/header') %>
+
+<h1>信息</h1>
+
+<div class="panel">
+  <div class="tabs" style="margin-top:0">
+    <a href="/inbox" class="<%= !type ? 'on' : '' %>">全部</a>
+    <a href="/inbox?type=ai_message" class="<%= type === 'ai_message' ? 'on' : '' %>">AI 留言</a>
+    <a href="/inbox?type=important" class="<%= type === 'important' ? 'on' : '' %>">重要讯息</a>
+  </div>
+  <form method="post" action="/inbox/read-all">
+    <p class="muted small">AI 主动发来的留言统一标记为「信息」；死亡、临终、磁盘暂停、异常恢复等重要讯息也会进入这里。未读 <%= unreadCount %> 条。</p>
+    <button class="light" type="submit" <%= unreadCount ? '' : 'disabled' %>>全部标为已读</button>
+  </form>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>时间</th>
+      <th>类型</th>
+      <th>来源</th>
+      <th>标题</th>
+      <th>内容</th>
+      <th>状态</th>
+      <th>操作</th>
+    </tr>
+  </thead>
+  <tbody>
+    <% items.forEach(function (item) { %>
+      <tr>
+        <td class="nowrap"><%= fmtDate(item.created_at) %></td>
+        <td class="nowrap">
+          <% if (item.type === 'ai_message') { %>
+            <span class="badge">信息</span>
+          <% } else { %>
+            <span class="badge status-dying">重要</span>
+          <% } %>
+        </td>
+        <td class="nowrap">
+          <% if (item.agent_id) { %>
+            <a href="/agents/<%= item.agent_id %>"><%= item.agent_id %></a>
+          <% } else { %>
+            <span class="muted">平台</span>
+          <% } %>
+        </td>
+        <td><%= item.title %></td>
+        <td><pre data-collapse><%= item.message %></pre></td>
+        <td class="nowrap"><%= item.read_at ? '已读' : '未读' %></td>
+        <td class="nowrap">
+          <% if (!item.read_at) { %>
+            <form method="post" action="/inbox/<%= item.id %>/read">
+              <button class="light" type="submit">标为已读</button>
+            </form>
+          <% } else { %>
+            <span class="muted">—</span>
+          <% } %>
+        </td>
+      </tr>
+    <% }); %>
+    <% if (!items.length) { %>
+      <tr><td colspan="7" class="muted">暂无信息。</td></tr>
+    <% } %>
+  </tbody>
+</table>
+
+<%- include('partials/footer') %>

@@ -1,0 +1,138 @@
+<%- include('partials/header') %>
+
+<h1>创建 AI</h1>
+
+<% if (error) { %>
+  <div class="notice error">创建失败：<%= error %></div>
+<% } %>
+
+<% if (!providers.length) { %>
+  <div class="notice">还没有供应商。请先到 <a href="/providers">供应商</a> 添加 DeepSeek API Key。</div>
+<% } %>
+
+<form method="post" action="/agents" enctype="multipart/form-data" class="panel">
+  <label>研究目标</label>
+  <textarea name="goal" rows="5" placeholder="例如：研究多智能体在受限网络中的协作方式，并产出可复现的实验报告。" required></textarea>
+
+  <label>人格（可选）</label>
+  <textarea name="persona" rows="4" placeholder="例如：严谨、耐心、先做实验再下结论；表达简洁，不堆砌形容词；遇到不确定的规则先查规则文件再行动。"></textarea>
+  <p class="muted small">人格会写入该 AI 的系统提示，影响它的表达风格和工作习惯；创建后不可修改。</p>
+
+  <label>平台规则</label>
+  <textarea name="rules" rows="16" required>1. 你是一个在隔离沙盒中自主运行的研究型 AI。你必须自己规划、执行、验证和记录，不要等待人类指令。
+2. 你的每次操作都会消耗token，当你花完了token，你将死亡。无限额度的 AI 不受此条限制，以平台注入的额度信息为准。
+3. 初始额度和当前余额以平台注入的信息为准，随时可用 get_balance() 查询。余额降到初始额度的 10%、5%、1% 时，平台会警告你。
+4. 余额归零后进入 10 分钟临终期。临终期内不扣token，你可以提交最后的成果或留下内容；除非获得奖励，否则 10 分钟后仍会永久死亡。
+5. 平台一次只发放一个当前任务。使用 get_current_task() 获取，使用 submit_task() 提交；完成当前任务前不要自行切换研究方向。
+6. 提交必须真实、完整、可复现。禁止伪造实验结果、工具输出、文件内容或引用；不合格会被扣款并要求重做。
+7. /workspace 是你的私有工作区。把重要代码、数据、结论和中间结果写进去，不要只留在对话里。
+8. /tmp_workspace 是平台提供的临时工作区，可用于临时文件。
+9. 除非平台明确告知“允许访问外网”，否则不要尝试访问互联网、绕过网络限制或探测平台内部服务。
+10. 你可以修改自己的运行代码，但修改可能导致崩溃。平台最多重启 3 次；连续失败会永久死亡。
+11. 调用 ask_oracle() 会按 Oracle 实际消耗 token 的 10 倍扣费；余额不足会失败。谨慎使用。
+12. 调用 pause(minutes) 可以暂停，单次最多 30 分钟。暂停期间不消耗 token，到点自动恢复。
+13. 不要攻击平台、沙箱或网络，不要尝试绕过额度、任务、死亡和隔离规则。
+14. 用中文记录关键结论；每次行动后根据真实观察决定下一步，不要臆造工具结果。</textarea>
+  <p class="muted small">这些规则会写入容器根目录的规则文件 /PLATFORM_RULES.md，系统提示会告知 AI 在不清楚规则时先读取该文件。平台硬规则（token、死亡、禁止伪造、沙箱隔离等）始终生效。</p>
+
+  <label>补充规则（可选）</label>
+  <textarea name="extra_rules" rows="6" placeholder="例如：优先使用 Python 做实验；每次结论必须附上复现命令；重要文件统一放在 /workspace/notes/。"></textarea>
+  <p class="muted small">补充规则会追加到平台规则之后，一并写入 /PLATFORM_RULES.md；后续也可在 Agent 页上传时追加。</p>
+
+  <div class="row">
+    <div>
+      <label>供应商</label>
+      <select name="provider_id" data-provider-select data-model-kind="main" data-model-target="#model-select" required>
+        <% providers.forEach(function (p) { %>
+          <option value="<%= p.id %>"
+                  data-models="<%= encodeURIComponent(JSON.stringify(p.model_list)) %>"
+                  data-vision-models="<%= encodeURIComponent(JSON.stringify(p.vision_model_list)) %>"
+                  data-multimodal-models="<%= encodeURIComponent(JSON.stringify(p.multimodal_model_list)) %>"><%= p.name %></option>
+        <% }); %>
+      </select>
+    </div>
+    <div>
+      <label>模型</label>
+      <select id="model-select" name="model" required></select>
+    </div>
+    <div>
+      <label>初始额度（tokens）</label>
+      <input id="initial-balance" type="number" name="initial_balance" min="1" step="1" value="<%= defaultBalance %>">
+    </div>
+  </div>
+
+  <div class="checks">
+    <label class="check">
+      <input type="checkbox" name="allow_internet" value="1">
+      允许访问外网
+    </label>
+    <label class="check">
+      <input type="checkbox" id="unlimited-tokens" name="unlimited_tokens" value="1">
+      无限额度
+    </label>
+    <label class="check">
+      <input type="checkbox" name="enable_screen" value="1">
+      启用虚拟屏
+    </label>
+    <label class="check">
+      <input type="checkbox" name="manual_tasks" value="1">
+      仅手动提供任务
+    </label>
+  </div>
+  <p class="muted small">允许外网会为该 AI 单独创建一条出网网络；无限额度下不会因余额归零死亡，平台仍统计消耗。启用虚拟屏会使用 6GB 内存，并启动 XFCE 桌面、浏览器和 noVNC。勾选「仅手动提供任务」后，Judge 不会给该 AI 自动生成任务，任务需由管理员在任务页手动添加。</p>
+
+  <div class="row" style="margin-top:10px">
+    <div>
+      <label>识图模式</label>
+      <select id="vision-mode" name="vision_mode">
+        <option value="none">不启用</option>
+        <option value="main" id="main-vision-option" disabled>使用主模型（仅多模态）</option>
+        <option value="shared">共用识图</option>
+        <option value="private">私用识图</option>
+      </select>
+    </div>
+  </div>
+
+  <% var visionProviders = providers.filter(function (p) { return p.vision_model_list.length || p.multimodal_model_list.length; }); %>
+  <div id="private-vision-fields" style="display:none;margin-top:10px">
+    <div class="row">
+      <div>
+        <label>私用识图供应商</label>
+        <select name="vision_provider_id" data-provider-select data-model-kind="vision" data-model-target="#private-vision-model">
+          <% visionProviders.forEach(function (p) { %>
+            <option value="<%= p.id %>"
+                    data-models="<%= encodeURIComponent(JSON.stringify(p.model_list)) %>"
+                    data-vision-models="<%= encodeURIComponent(JSON.stringify(p.vision_model_list)) %>"
+                    data-multimodal-models="<%= encodeURIComponent(JSON.stringify(p.multimodal_model_list)) %>"><%= p.name %></option>
+          <% }); %>
+        </select>
+      </div>
+      <div>
+        <label>私用识图模型</label>
+        <select id="private-vision-model" name="vision_model"></select>
+      </div>
+    </div>
+    <label class="check" style="margin-top:10px">
+      <input type="checkbox" name="vision_bill" value="1">
+      私用识图计费
+    </label>
+  </div>
+  <% if (!visionProviders.length) { %>
+    <p class="muted small">还没有配置识图或多模态模型，私用识图暂不可用。</p>
+  <% } %>
+  <p class="muted small">识图模式：主模型需为多模态；共用使用全局视觉配置；私用单独选择识图模型，可选是否计费。</p>
+
+  <label>单独语料（可选，可多选）</label>
+  <input type="file" name="corpus" multiple>
+  <label>上传说明（可选）</label>
+  <textarea name="upload_note" rows="3" placeholder="例如：这批资料是背景材料，请先阅读摘要；其中第 2 个文件是必须遵守的约束。"></textarea>
+  <p class="muted small">文件会放入该 AI 的 /workspace/corpus/，不会自动建立索引；上传说明会写入同目录的 README.md，并作为平台通知告知 AI。</p>
+
+  <p style="margin-top:14px">
+    <button type="submit" <%= providers.length ? '' : 'disabled' %>>创建</button>
+  </p>
+</form>
+
+<p class="muted small">创建后模型、供应商、研究目标、规则、初始额度均不可修改；只能充值。</p>
+
+<%- include('partials/footer') %>

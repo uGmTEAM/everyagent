@@ -1,0 +1,21 @@
+<%- include('partials/header') %>
+
+<h1><%= title %></h1>
+<p class="muted">
+  <%= agent.id %> ·
+  <%= root === 'shared' ? '/tmp_workspace' : '/workspace' %> /
+  <%= relative %> ·
+  <%= size %>
+</p>
+<p>
+  <a class="btn light" href="/agents/<%= agent.id %>?tab=files&root=<%= root %>&path=<%= encodeURIComponent(relative.split('/').slice(0, -1).join('/')) %>">返回目录</a>
+  <a class="btn light" href="/agents/<%= agent.id %>/file?root=<%= root %>&path=<%= encodeURIComponent(relative) %>&download=1">下载</a>
+</p>
+
+<% if (content !== null) { %>
+  <pre><%= content %></pre>
+<% } else { %>
+  <div class="panel">该文件为二进制或超过 1MB，请使用下载。</div>
+<% } %>
+
+<%- include('partials/footer') %>

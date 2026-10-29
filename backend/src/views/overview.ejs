@@ -1,0 +1,90 @@
+<%- include('partials/header') %>
+
+<h1>总览</h1>
+
+<div class="grid">
+  <div class="stat"><div class="k">存活 AI</div><div class="v"><%= fmtInt(totals.alive) %></div></div>
+  <div class="stat"><div class="k">已死亡</div><div class="v"><%= fmtInt(totals.dead) %></div></div>
+  <div class="stat"><div class="k">任务数</div><div class="v"><%= fmtInt(totals.tasks) %></div></div>
+  <div class="stat"><div class="k">请求总数</div><div class="v"><%= fmtInt(totals.requests) %></div></div>
+  <div class="stat"><div class="k">对话 token</div><div class="v"><%= fmtInt(totals.chat_tokens) %></div></div>
+  <div class="stat"><div class="k">Docker</div><div class="v"><%= dockerOk ? '已连接' : '未连接' %></div></div>
+</div>
+
+<% if (!dockerOk) { %>
+  <div class="notice error">
+    Docker 尚未连接。后端仍可启动，但创建 AI 时容器不会启动。请先完成 Docker Desktop 安装并运行 <code>docker run --rm hello-world</code>。
+  </div>
+<% } %>
+
+<% if (!agents.length) { %>
+  <div class="panel">
+    <p>还没有 AI。先到 <a href="/providers">供应商</a> 配置 DeepSeek API Key，再到 <a href="/agents/new">创建 AI</a>。</p>
+  </div>
+<% } else { %>
+<table>
+  <thead>
+    <tr>
+      <th>编号</th>
+      <th>状态</th>
+      <th>外网</th>
+      <th>余额</th>
+      <th>当前任务</th>
+      <th>模型</th>
+      <th>供应商</th>
+      <th>请求</th>
+      <th>tokens</th>
+      <th>创建时间</th>
+      <th>操作</th>
+    </tr>
+  </thead>
+  <tbody>
+    <% agents.forEach(function (a) { %>
+      <tr>
+        <td class="nowrap"><a href="/agents/<%= a.id %>"><%= a.id %></a></td>
+        <td class="nowrap"><span class="badge <%= statusClass(a.status) %>"><%= statusText(a.status) %></span></td>
+        <td class="nowrap"><%= a.allow_internet ? '允许' : '禁止' %></td>
+        <td class="right nowrap"><%= a.unlimited_tokens ? '无限' : fmtInt(a.balance) %></td>
+        <td><%= a.task_title || '无' %></td>
+        <td class="nowrap"><%= a.model %></td>
+        <td class="nowrap"><%= a.provider_name || '未配置' %></td>
+        <td class="right"><%= fmtInt(a.request_count) %></td>
+        <td class="right"><%= fmtInt(a.total_tokens) %></td>
+        <td class="nowrap"><%= fmtDate(a.created_at) %></td>
+        <td class="nowrap">
+          <a class="btn light" href="/agents/<%= a.id %>?tab=usage">充值</a>
+          <% if (a.status === 'created') { %>
+            <form class="inline" method="post" action="/agents/<%= a.id %>/start">
+              <button class="light" type="submit">启动</button>
+            </form>
+          <% } %>
+          <% if (a.status === 'paused_disk') { %>
+            <form class="inline" method="post" action="/agents/<%= a.id %>/resume">
+              <button class="light" type="submit">恢复</button>
+            </form>
+          <% } %>
+        </td>
+      </tr>
+    <% }); %>
+  </tbody>
+</table>
+<% } %>
+
+<h2>最近事件</h2>
+<table>
+  <thead>
+    <tr><th>时间</th><th>对象</th><th>类型</th><th>内容</th></tr>
+  </thead>
+  <tbody>
+    <% (recentEvents || []).forEach(function (e) { %>
+      <tr>
+        <td class="nowrap"><%= fmtDate(e.created_at) %></td>
+        <td class="nowrap"><%= e.agent_seq ? `AI-${String(e.agent_seq).padStart(3, '0')}` : '平台' %></td>
+        <td class="nowrap"><%= e.type %></td>
+        <td><%= e.message %></td>
+      </tr>
+    <% }); %>
+  </tbody>
+</table>
+
+<%- include('partials/footer') %>

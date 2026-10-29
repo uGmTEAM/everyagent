@@ -1,0 +1,30 @@
+<%- include('partials/header') %>
+
+<h1>公共语料</h1>
+
+<div class="panel">
+  <form method="post" action="/corpus" enctype="multipart/form-data">
+    <label>上传文件</label>
+    <input type="file" name="corpus" multiple required>
+    <p class="muted small">文件会放入 <code>data/tmp_workspace/public_corpus/</code>。AI 视角下它是 <code>/tmp_workspace/public_corpus</code>，不会暴露“公共/共享”字样。</p>
+    <p style="margin-top:10px"><button type="submit">上传</button></p>
+  </form>
+</div>
+
+<table>
+  <thead><tr><th>名称</th><th>类型</th><th>大小</th></tr></thead>
+  <tbody>
+    <% files.forEach(function (f) { %>
+      <tr>
+        <td><%= f.name %></td>
+        <td><%= f.isDir ? '目录' : '文件' %></td>
+        <td><%= f.isDir ? '' : fmtBytes(f.size) %></td>
+      </tr>
+    <% }); %>
+    <% if (!files.length) { %>
+      <tr><td colspan="3" class="muted">暂无公共语料</td></tr>
+    <% } %>
+  </tbody>
+</table>
+
+<%- include('partials/footer') %>

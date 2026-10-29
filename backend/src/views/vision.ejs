@@ -1,0 +1,54 @@
+<%- include('partials/header') %>
+
+<h1>视觉配置</h1>
+
+<% var visionProviders = providers.filter(function (p) { return p.vision_model_list.length || p.multimodal_model_list.length; }); %>
+
+<% if (!visionProviders.length) { %>
+  <div class="notice">还没有可用的识图模型。请先到 <a href="/providers">供应商</a> 配置「识图模型」或「多模态模型」。</div>
+<% } %>
+
+<div class="panel">
+  <form method="post" action="/vision">
+    <label class="check">
+      <input type="checkbox" name="enabled" value="1" <%= visionConfig.enabled ? 'checked' : '' %>>
+      启用共用识图
+    </label>
+
+    <div class="row">
+      <div>
+        <label>共用识图供应商</label>
+        <select name="provider_id" data-provider-select data-model-kind="vision" data-model-target="#shared-vision-model">
+          <% visionProviders.forEach(function (p) { %>
+            <option value="<%= p.id %>"
+                    data-models="<%= encodeURIComponent(JSON.stringify(p.model_list)) %>"
+                    data-vision-models="<%= encodeURIComponent(JSON.stringify(p.vision_model_list)) %>"
+                    data-multimodal-models="<%= encodeURIComponent(JSON.stringify(p.multimodal_model_list)) %>"
+                    <%= visionConfig.provider_id === p.id ? 'selected' : '' %>><%= p.name %></option>
+          <% }); %>
+        </select>
+      </div>
+      <div>
+        <label>共用识图模型</label>
+        <select id="shared-vision-model" name="model" data-selected-model="<%= visionConfig.model || '' %>"></select>
+      </div>
+    </div>
+
+    <label class="check" style="margin-top:12px">
+      <input type="checkbox" name="bill_shared" value="1" <%= visionConfig.bill_shared ? 'checked' : '' %>>
+      共用识图计费（默认关闭，即免费）
+    </label>
+
+    <label>视觉系统提示词</label>
+    <textarea name="system_prompt" rows="8" placeholder="你是一个屏幕视觉助手。请准确描述截图中的界面、文字、按钮、窗口和当前状态；如果用户提出具体问题，优先回答该问题。不要编造截图中不存在的内容。"><%= visionConfig.system_prompt || '' %></textarea>
+
+    <p style="margin-top:12px"><button type="submit" <%= visionProviders.length ? '' : 'disabled' %>>保存</button></p>
+  </form>
+</div>
+
+<p class="muted small">
+  共用识图供所有选择「共用识图」的 AI 使用，默认免费；勾选计费后按视觉模型实际 token 扣 AI 余额。
+  私用识图在创建 AI 时单独选择供应商、模型和是否计费，不受这里影响。
+</p>
+
+<%- include('partials/footer') %>

@@ -1,0 +1,113 @@
+<%- include('partials/header') %>
+
+<h1>任务表</h1>
+
+<% if (added) { %>
+  <div class="notice ok">已添加任务 <%= added %>。目标 AI 会被唤醒并收到新任务通知。</div>
+<% } %>
+<% if (taskError) { %>
+  <div class="notice error"><%= taskError %></div>
+<% } %>
+
+<div class="panel">
+  <h3>添加任务</h3>
+  <form method="post" action="/tasks">
+    <div class="row">
+      <div><label>标题</label><input name="title" required></div>
+      <div><label>验收标准</label><input name="acceptance" required></div>
+      <div>
+        <label>目标 AI</label>
+        <select name="target_agent_id">
+          <option value="">全部 AI（统一任务）</option>
+          <% agents.forEach(function (a) { %>
+            <option value="<%= a.id %>"><%= a.id %></option>
+          <% }); %>
+        </select>
+      </div>
+    </div>
+    <label>描述</label>
+    <textarea name="description" rows="4" required></textarea>
+    <div class="checks">
+      <label class="check">
+        <input type="checkbox" name="long_term" value="1">
+        长期任务（完成不淘汰，只累计完成次数）
+      </label>
+    </div>
+    <p style="margin-top:10px"><button type="submit">添加</button></p>
+  </form>
+  <p class="muted small">指定目标 AI 时，该任务只会下发给这一个 AI，其他 AI 看不到，也不计入自动补任务的数量。长期任务通过后仍留在任务表中，平台只累计每个 AI 的完成次数。</p>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>序号</th>
+      <th>标题</th>
+      <th>描述</th>
+      <th>验收标准</th>
+      <th>来源</th>
+      <th>类型</th>
+      <th>目标</th>
+      <% agents.forEach(function (a) { %>
+        <th><a href="/agents/<%= a.id %>?tab=tasks"><%= a.id %></a></th>
+      <% }); %>
+      <th>操作</th>
+    </tr>
+  </thead>
+  <tbody>
+    <% tasks.forEach(function (t) { %>
+      <tr>
+        <td><%= t.seq %></td>
+        <td><%= t.title %></td>
+        <td><%= t.description %></td>
+        <td><%= t.acceptance %></td>
+        <td><%= t.source %></td>
+        <td class="nowrap"><%= t.long_term ? '长期' : '一次性' %></td>
+        <td class="nowrap"><%= t.target_agent_id || '全部' %></td>
+        <% agents.forEach(function (a) { %>
+          <% var p = progressMap.get(a.id + ':' + t.id); %>
+          <td class="nowrap">
+            <% if (!p) { %>
+              <span class="muted">—</span>
+            <% } else if (p.status === 'passed') { %>
+              <span class="badge status-running">已通过</span>
+            <% } else if (t.long_term) { %>
+              <span class="badge">长期</span>
+              <% if (p.completions > 0) { %>
+                <span class="muted small">完成 <%= p.completions %> 次</span>
+              <% } else { %>
+                <span class="badge">待完成</span>
+              <% } %>
+            <% } else { %>
+              <span class="badge">待完成</span>
+              <% if (p.attempts > 0) { %><span class="muted small">尝试 <%= p.attempts %></span><% } %>
+            <% } %>
+          </td>
+        <% }); %>
+        <td>
+          <details>
+            <summary>编辑</summary>
+            <form method="post" action="/tasks/<%= t.id %>/update">
+              <label>标题</label><input name="title" value="<%= t.title %>" required>
+              <label>描述</label><textarea name="description" rows="3" required><%= t.description %></textarea>
+              <label>验收标准</label><textarea name="acceptance" rows="3" required><%= t.acceptance %></textarea>
+              <p style="margin-top:8px"><button class="light" type="submit">保存</button></p>
+            </form>
+            <form method="post" action="/tasks/<%= t.id %>/delete" data-confirm="确认停用任务 #<%= t.seq %>？">
+              <button class="danger" type="submit">停用</button>
+            </form>
+          </details>
+        </td>
+      </tr>
+    <% }); %>
+    <% if (!tasks.length) { %>
+      <tr><td colspan="<%= 8 + agents.length %>" class="muted">暂无任务。配置 Judge 后会自动生成第一批。</td></tr>
+    <% } %>
+  </tbody>
+</table>
+
+<p class="muted small">
+  任一存活 AI 的剩余任务少于 5 个时，Judge 会为所有 AI 追加 5 个任务。AI 只能看到自己的当前任务。
+</p>
+
+<%- include('partials/footer') %>
