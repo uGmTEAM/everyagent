@@ -7,7 +7,6 @@ const llm = require('./llm');
 const prompts = require('./prompts');
 const tasks = require('./tasks');
 const billing = require('./billing');
-const toolkits = require('./toolkits');
 const { addEvent, notifyAgent } = require('./events');
 const {
   nowIso,
@@ -39,8 +38,7 @@ function rulesFile(agentId) {
   return path.join(agentRoot(agentId), 'platform_rules.md');
 }
 
-function listAgents(mode) {
-  const filter = mode ? 'WHERE a.mode = ?' : '';
+function listAgents() {
   return db.all(
     `SELECT a.*, p.name AS provider_name,
        (SELECT COUNT(*) FROM requests r WHERE r.agent_id = a.id) AS request_count,
@@ -48,9 +46,7 @@ function listAgents(mode) {
        (SELECT t.title FROM tasks t WHERE t.id = a.current_task_id) AS task_title
      FROM agents a
      LEFT JOIN providers p ON p.id = a.provider_id
-     ${filter}
-     ORDER BY a.seq ASC`,
-    mode ? [mode] : []
+     ORDER BY a.seq ASC`
   );
 }
 
@@ -110,8 +106,6 @@ function writeAgentConfig(agent) {
     promptMode: agent.prompt_mode || 'inline',
     rulesFile: agent.prompt_mode === 'file' ? prompts.RULES_FILE_PATH : null,
     manualTasks: Boolean(agent.manual_tasks),
-    mode: agent.mode || 'research',
-    toolkits: toolkits.parseAgentToolkits(agent.toolkits),
     model: agent.model,
     modelType: agent.model_type || 'text',
     initialBalance: agent.initial_balance,
@@ -132,7 +126,6 @@ function writeAgentConfig(agent) {
     oracleCostMultiplier: config.oracleCostMultiplier,
     contextKeepRecent: config.contextKeepRecent,
     maxOutputTokens: config.maxOutputTokens,
-    companionMaxGroupReplyChars: config.companionMaxGroupReplyChars,
     paths: {
       workspace: '/workspace',
       tempWorkspace: '/tmp_workspace',
@@ -306,8 +299,6 @@ async function createAgent({
   visionModel = null,
   visionBill = false,
   manualTasks = false,
-  mode: runMode = 'research',
-  toolkits: toolkitNames = [],
   uploadNote = '',
   corpusFiles = []
 }) {
@@ -316,10 +307,8 @@ async function createAgent({
   const cleanExtraRules = String(extraRules || '').trim();
   const cleanPersona = String(persona || '').trim().slice(0, 4000);
   const cleanUploadNote = String(uploadNote || '').trim();
-  const cleanRunMode = runMode === 'companion' ? 'companion' : 'research';
-  if (!cleanGoal || !cleanRules) {
-    throw new Error(cleanRunMode === 'companion' ? '陪伴目标与平台规则不能为空' : '研究目标不能为空');
-  }
+  if (!cleanGoal) throw new Error('研究目标不能为空');
+  if (!cleanRules) throw new Error('平台规则不能为空');
 
   const provider = getProvider(providerId);
   if (!provider) throw new Error('供应商不存在');
@@ -364,17 +353,6 @@ async function createAgent({
   }
 
   const balance = Math.max(1, toInt(initialBalance, config.defaultInitialBalance));
-  const isCompanion = cleanRunMode === 'companion';
-  // 陪伴 AI 固定：无限额度、启用虚拟屏（QQ 需要）、不领平台任务、崩溃上限 5 次、规则 inline。
-  const effectiveUnlimited = isCompanion ? true : Boolean(unlimitedTokens);
-  const effectiveScreen = isCompanion ? true : Boolean(enableScreen);
-  const effectiveInternet = isCompanion ? true : Boolean(allowInternet);
-  const effectiveManual = isCompanion ? true : Boolean(manualTasks);
-  const promptMode = isCompanion ? 'inline' : 'file';
-  const crashMax = isCompanion ? config.companionCrashMaxRetries : null;
-  const toolkitSnapshot = toolkits.snapshot(
-    Array.isArray(toolkitNames) ? toolkitNames : [toolkitNames].filter(Boolean)
-  );
   const seq = nextSeq();
   const id = `AI-${String(seq).padStart(3, '0')}`;
   const apiKey = randomKey();
@@ -384,9 +362,8 @@ async function createAgent({
     `INSERT INTO agents
       (id, seq, goal, rules, provider_id, model, model_type, initial_balance, balance, status, api_key,
        allow_internet, unlimited_tokens, enable_screen, vision_mode, vision_provider_id, vision_model,
-       vision_bill, extra_rules, manual_tasks, persona, prompt_mode, toolkits, mode,
-       crash_max_retries, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       vision_bill, extra_rules, manual_tasks, persona, prompt_mode, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'file', ?)`,
     [
       id,
       seq,
@@ -398,20 +375,16 @@ async function createAgent({
       balance,
       balance,
       apiKey,
-      effectiveInternet ? 1 : 0,
-      effectiveUnlimited ? 1 : 0,
-      effectiveScreen ? 1 : 0,
+      allowInternet ? 1 : 0,
+      unlimitedTokens ? 1 : 0,
+      enableScreen ? 1 : 0,
       mode,
       visionProvider,
       visionModelName,
       visionBillFlag,
       cleanExtraRules,
-      effectiveManual ? 1 : 0,
+      manualTasks ? 1 : 0,
       cleanPersona || null,
-      promptMode,
-      JSON.stringify(toolkitSnapshot),
-      cleanRunMode,
-      crashMax,
       createdAt
     ]
   );
@@ -422,19 +395,17 @@ async function createAgent({
   if (savedCorpus.length || cleanUploadNote) {
     writeCorpusNote(id, cleanUploadNote, savedCorpus);
   }
-  if (!isCompanion) tasks.ensureAgentTaskRows(id);
-  addEvent(id, 'created', `${isCompanion ? '陪伴' : '研究'} AI ${id} 已创建，初始额度 ${effectiveUnlimited ? '无限' : `${balance.toLocaleString('en-US')} tokens`}。`, {
+  tasks.ensureAgentTaskRows(id);
+  addEvent(id, 'created', `AI ${id} 已创建，初始额度 ${unlimitedTokens ? '无限' : `${balance.toLocaleString('en-US')} tokens`}。`, {
     model,
     modelType,
     provider: provider.name,
     balance,
-    mode: cleanRunMode,
-    allowInternet: effectiveInternet,
-    unlimitedTokens: effectiveUnlimited,
-    enableScreen: effectiveScreen,
+    allowInternet: Boolean(allowInternet),
+    unlimitedTokens: Boolean(unlimitedTokens),
+    enableScreen: Boolean(enableScreen),
     visionMode: mode,
-    manualTasks: effectiveManual,
-    toolkits: toolkitSnapshot.map((item) => item.name),
+    manualTasks: Boolean(manualTasks),
     extraRules: Boolean(cleanExtraRules)
   });
 
@@ -447,15 +418,13 @@ async function createAgent({
     result = getAgent(id);
   }
 
-  if (!isCompanion) {
-    try {
-      if (!effectiveManual) {
-        await tasks.maybeRefillTasks({ initial: true });
-      }
-      tasks.refreshCurrentTask(id);
-    } catch {
-      // 任务生成失败不影响创建
+  try {
+    if (!manualTasks) {
+      await tasks.maybeRefillTasks({ initial: true });
     }
+    tasks.refreshCurrentTask(id);
+  } catch {
+    // 任务生成失败不影响创建
   }
 
   return getAgent(id);
@@ -470,21 +439,13 @@ async function startAgent(agentId) {
   // 确保提示词（工具清单、记忆规范等）与后端代码保持一致。
   writeAgentConfig(agent);
 
-  if (agent.mode === 'companion') {
-    ensureDir(path.join(agentRoot(agent.id), '.qq'));
-  }
-
   let containerId = agent.container_id;
   let info = containerId ? await docker.inspectContainer(containerId) : null;
-
-  const agentToolkits = toolkits.parseAgentToolkits(agent.toolkits);
-  const toolkitBinds = toolkits.binds(agentToolkits.map((item) => item.name));
 
   if (!info) {
     const created = await docker.createAgentContainer(agent, {
       hostWorkspace: workspaceDir(agent.id),
-      hostRulesFile: agent.prompt_mode === 'file' ? rulesFile(agent.id) : null,
-      toolkitBinds
+      hostRulesFile: agent.prompt_mode === 'file' ? rulesFile(agent.id) : null
     });
     containerId = created.containerId;
   } else if (!info.State?.Running) {
@@ -495,14 +456,6 @@ async function startAgent(agentId) {
     await docker.fixGithubHosts(containerId);
   } catch {
     // 修复失败不影响启动
-  }
-
-  if (toolkitBinds.length) {
-    try {
-      await toolkits.link(containerId);
-    } catch (error) {
-      addEvent(agentId, 'toolkit_error', `预设工具安装失败：${error.message}`);
-    }
   }
 
   db.run(

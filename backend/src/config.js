@@ -13,8 +13,6 @@ const config = {
   deathDir: path.join(DATA, 'death_agents'),
   logsDir: path.join(DATA, 'logs'),
   uploadsDir: path.join(DATA, 'uploads'),
-  // 预设工具集：每个子目录是一个 GitHub release（解压后），创建 AI 时可勾选挂载
-  toolkitsDir: path.join(DATA, 'toolkits'),
 
   backendPort: Number(process.env.EA_PORT || 7842),
   panelPort: Number(process.env.EA_PANEL_PORT || 7843),
@@ -22,13 +20,6 @@ const config = {
   panelBind: process.env.EA_PANEL_BIND || '0.0.0.0',
 
   agentImage: process.env.EA_AGENT_IMAGE || 'ea-agent:latest',
-  // 陪伴模式镜像：ea-agent + QQ NT + ai-qq-bridge，桥与 AI 同容器（Xvfb :99 → QQ → 桥 :3100）
-  companionImage: process.env.EA_COMPANION_IMAGE || 'ea-companion:latest',
-  // 面板把陪伴容器的 3100 映射到宿主机 127.0.0.1:<bridgeBasePort + seq>
-  bridgeBasePort: Number(process.env.EA_BRIDGE_BASE_PORT || 7910),
-  companionPollIntervalMs: Number(process.env.EA_COMPANION_POLL_MS || 1500),
-  companionPollWaitSec: Number(process.env.EA_COMPANION_WAIT_SEC || 5),
-  companionMaxGroupReplyChars: Number(process.env.EA_COMPANION_GROUP_MAX || 600),
   egressImage: process.env.EA_EGRESS_IMAGE || 'ea-egress:latest',
   egressContainer: 'ea-egress',
   controlNetwork: 'ea-control',
@@ -47,8 +38,6 @@ const config = {
   dyingGraceMs: 10 * 60 * 1000,
   pauseMaxMinutes: 30,
   crashMaxRetries: 3,
-  // 陪伴 AI 默认崩溃重启上限（创建后不可改）
-  companionCrashMaxRetries: 5,
   crashStableMs: 60 * 1000,
   taskBatchSize: 5,
   taskRefillThreshold: 5,

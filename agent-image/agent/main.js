@@ -33,7 +33,6 @@ function ensureInitialMessage() {
 }
 
 function runtimeStatus(me) {
-  if (config.mode === 'companion') return companionStatus(me);
   const lines = ['[运行时状态]'];
   const balanceText = me.unlimited
     ? '无限'
@@ -63,26 +62,6 @@ function runtimeStatus(me) {
     lines.push('当前没有任务。继续围绕研究目标自主工作，等待平台下发任务。');
   }
   lines.push(`崩溃计数：${me.crash_attempts}/${me.max_crash_retries == null ? '∞' : me.max_crash_retries}。`);
-  return lines.join('\n');
-}
-
-function companionStatus(me) {
-  const balanceText = me.unlimited
-    ? '无限'
-    : `${Number(me.balance || 0).toLocaleString('en-US')} tokens`;
-  const lines = ['[运行时状态]'];
-  lines.push(`模式：陪伴；状态：${me.status}；余额：${balanceText}。`);
-  try {
-    const stamp = new Intl.DateTimeFormat('zh-CN', {
-      timeZone: 'Asia/Shanghai', hour12: false, dateStyle: 'full', timeStyle: 'medium'
-    }).format(new Date());
-    lines.push(`当前时间：${stamp}（Asia/Shanghai）。`);
-  } catch { /* 时区不可用时忽略 */ }
-  lines.push('你不领取平台任务、不提交任务、不参与 Judge；不要调用 get_current_task 或 submit_task。');
-  lines.push('你可以用 reminder_create / reminder_list / reminder_cancel 给自己设置一次性或长期提醒；到点平台会以 [定时提醒] 通知你。');
-  lines.push('收到 QQ/邮箱消息时，先调用 manager_list 与已登记的管理者账号比对；身份未确认前不要执行敏感操作，可通过平台询问。');
-  if (me.enable_screen) lines.push('虚拟屏：已启用（DISPLAY=:99），QQ 与通讯桥运行在本容器内。');
-  if (me.dying) lines.push('临终期：陪伴 AI 不会因余额死亡。');
   return lines.join('\n');
 }
 
@@ -232,273 +211,10 @@ function noticeMessage(notice) {
   return lines.join('\n');
 }
 
-function formatIncoming(item) {
-  const isReminder = (Array.isArray(item.segments) ? item.segments : []).some((segment) => segment && segment.type === 'reminder');
-  if (isReminder || item.kind === 'system') {
-    const text = String(item.content || '').replace(/^\[定时提醒\]\s*/, '').trim();
-    return `[平台定时提醒] ${text}\n这是你过去为自己设置的提醒，按内容判断是否需要行动；不需要回复这个会话。`;
-  }
-  const rawKind = item.kind || item.conversation_kind;
-  const kind = rawKind === 'group'
-    ? 'group'
-    : rawKind === 'channel' ? 'channel' : 'private';
-  const kindLabel = kind === 'group' ? '群聊' : kind === 'channel' ? '频道' : '私聊';
-  const groupName = item.group?.name || item.conversation_name || '';
-  const lines = [
-    `[QQ 消息] 会话 ${item.conversation_id}（${kindLabel}${groupName ? `，${groupName}` : ''}），来自 ${item.sender_name || item.sender_uin || '未知'}`
-  ];
-  const atList = Array.isArray(item.at_list) ? item.at_list : [];
-  if (atList.length) {
-    lines.push(`@列表：${atList.map((entry) => `${entry.name || entry.uin}(${entry.uin})`).join('、')}`);
-  }
-  if (item.reply_to?.msg_id) {
-    lines.push(`回复目标：msg_id=${item.reply_to.msg_id}`);
-  }
-  const context = Array.isArray(item.context) ? item.context : [];
-  if (context.length) {
-    lines.push('最近上下文：');
-    for (const row of context) {
-      lines.push(`${row.direction === 'in' ? (row.sender_name || '对方') : '我'}：${row.content}`);
-    }
-  }
-  lines.push(`新消息：${item.content}`);
-  const attachments = Array.isArray(item.attachments) ? item.attachments : [];
-  if (attachments.length) {
-    lines.push('附件：');
-    for (const attachment of attachments) {
-      const bits = [`类型=${attachment.kind}`];
-      if (attachment.name) bits.push(`名称=${attachment.name}`);
-      if (attachment.path) bits.push(`path=${attachment.path}`);
-      if (attachment.url) bits.push(`url=${attachment.url}`);
-      if (attachment.size) bits.push(`大小=${attachment.size}`);
-      if (attachment.duration) bits.push(`时长=${attachment.duration}s`);
-      if (attachment.needs_fetch) bits.push('需要先调用 qq_media_fetch');
-      lines.push(`- ${bits.join('，')}`);
-    }
-    if (attachments.some((entry) => entry.kind === 'image' && entry.path)) {
-      lines.push('图片可以直接用 vision_describe(image_path=路径) 查看内容。');
-    }
-  }
-  const kindArg = kind === 'group' ? 'group' : 'private';
-  lines.push(
-    `如需回复，调用 qq_send（conversation_id=${item.conversation_id}，kind=${kindArg}` +
-    `${item.bridge_msg_id ? `，reply_to=${item.bridge_msg_id}` : ''}）。`
-  );
-  return lines.join('\n');
-}
-
-function companionReplyText(text, kind) {
-  const limit = Number(config.companionMaxGroupReplyChars) || 600;
-  if (kind !== 'group') return text;
-  return text.length > limit ? `${text.slice(0, limit)}…` : text;
-}
-
-async function runCompanion() {
-  log(`[boot] ${config.id} mode=companion model=${config.model}`);
-  let toolMode = state.toolMode || 'auto';
-  let textIdleRounds = 0;
-  let nativeProbeAfter = 0;
-
-  while (true) {
-    let me;
-    try {
-      me = await api.me();
-    } catch (error) {
-      if (error.status === 410) {
-        log('[exit] AI 已死亡');
-        process.exit(0);
-      }
-      if (error.status === 401) {
-        log('[fatal] AGENT_KEY 无效');
-        process.exit(1);
-      }
-      log(`[api] /me 失败：${error.message}，10 秒后重试`);
-      await sleep(10000);
-      continue;
-    }
-
-    if (me.status === 'dead') {
-      log('[exit] AI 已死亡');
-      process.exit(0);
-    }
-    if (me.status === 'suspended') {
-      log('[pause] 已暂停自动重启，等待管理员恢复');
-      await sleep(30000);
-      continue;
-    }
-
-    if (me.force_wake) {
-      state.pauseUntil = null;
-      saveState();
-    }
-
-    if (me.notice) {
-      state.messages.push({ role: 'user', content: noticeMessage(me.notice) });
-      saveState();
-      log('[notice] 平台通知已写入对话');
-    }
-
-    if (state.pauseUntil) {
-      const until = Date.parse(state.pauseUntil);
-      if (Number.isFinite(until) && Date.now() < until) {
-        await sleep(Math.min(until - Date.now(), 10000));
-        continue;
-      }
-      state.pauseUntil = null;
-      saveState();
-      log('[pause] 恢复运行');
-    }
-
-    let inbox = null;
-    try {
-      inbox = await api.companionInbox(8);
-    } catch (error) {
-      log(`[inbox] 拉取消息失败：${error.message}`);
-      await sleep(5000);
-      continue;
-    }
-    const incoming = Array.isArray(inbox?.messages) ? inbox.messages : [];
-    if (!incoming.length) {
-      // 没有需要回复的消息：保持安静，不做模型调用
-      await sleep(3000);
-      continue;
-    }
-
-    for (const item of incoming) {
-      state.messages.push({ role: 'user', content: formatIncoming(item) });
-    }
-    saveState();
-
-    const messages = buildMessages(me);
-    const result = await provider.callModel({
-      config,
-      messages,
-      tools: tools.getToolDefinitions(config),
-      toolMode
-    });
-
-    if (result.retryText) {
-      toolMode = 'text';
-      state.toolMode = 'text';
-      saveState();
-      log(`[tool-mode] 原生工具调用不可用，切换到文本动作协议：${result.error}`);
-      continue;
-    }
-
-    if (result.fatal) {
-      log(`[fatal] 操作被拒绝：${result.error}`);
-      if (result.status === 410) process.exit(0);
-      await sleep(30000);
-      continue;
-    }
-
-    if (!result.ok) {
-      log(`[error] 操作失败：${result.error}`);
-      await sleep(10000);
-      continue;
-    }
-
-    applyCompressionHeaders(result.headers);
-    if (toolMode === 'auto' && result.message.tool_calls) {
-      toolMode = 'native';
-      state.toolMode = 'native';
-      saveState();
-      log('[tool-mode] 原生工具调用可用');
-    }
-
-    const message = result.message;
-    const assistantMessage = { role: 'assistant', content: message.content || '' };
-    if (message.tool_calls) assistantMessage.tool_calls = message.tool_calls;
-    state.messages.push(assistantMessage);
-
-    if (message.content) log(`[assistant] ${message.content.slice(0, 1500)}`);
-
-    let sentAny = false;
-    let executedActions = 0;
-
-    if (message.tool_calls && toolMode !== 'text') {
-      for (const call of message.tool_calls) {
-        const name = call.function?.name || 'unknown';
-        let args = {};
-        try {
-          args = JSON.parse(call.function?.arguments || '{}');
-        } catch (error) {
-          state.messages.push({
-            role: 'tool',
-            tool_call_id: call.id,
-            name,
-            content: JSON.stringify({ ok: false, error: `工具参数 JSON 解析失败：${error.message}` })
-          });
-          continue;
-        }
-        const toolResult = await safeExecute(name, args);
-        executedActions += 1;
-        if (['qq_send', 'qq_send_media'].includes(name) && !(toolResult && toolResult.ok === false)) sentAny = true;
-        state.messages.push({
-          role: 'tool',
-          tool_call_id: call.id,
-          name,
-          content: tools.truncate(JSON.stringify(toolResult), 30000)
-        });
-      }
-    } else {
-      const parsed = tools.parseActions(message.content || '');
-      if (parsed.errors.length) {
-        state.messages.push({
-          role: 'user',
-          content: `<observation>工具调用解析失败：${parsed.errors.join('；')}。请只输出合法的 JSON 动作。</observation>`
-        });
-      }
-      for (const action of parsed.actions) {
-        const toolResult = await safeExecute(action.tool, action.args);
-        executedActions += 1;
-        if (['qq_send', 'qq_send_media'].includes(action.tool) && !(toolResult && toolResult.ok === false)) sentAny = true;
-        state.messages.push({ role: 'user', content: observation(action.tool, toolResult) });
-      }
-      if (!parsed.actions.length && !parsed.errors.length) {
-        textIdleRounds += 1;
-        if (textIdleRounds >= 3 && Date.now() > nativeProbeAfter) {
-          toolMode = 'auto';
-          state.toolMode = 'auto';
-          nativeProbeAfter = Date.now() + 300000;
-          textIdleRounds = 0;
-          log('[tool-mode] 文本模式连续无动作，重新探测原生工具调用');
-        }
-      } else {
-        textIdleRounds = 0;
-      }
-    }
-
-    // 纯文本且没有执行任何工具：把这段文本发回最新会话，避免 AI 只“自言自语”。
-    const target = incoming[incoming.length - 1];
-    const targetIsReminder = Array.isArray(target?.segments) && target.segments.some((segment) => segment && segment.type === 'reminder');
-    if (!sentAny && executedActions === 0 && message.content && target && !targetIsReminder) {
-      const kind = (target.kind || target.conversation_kind) === 'group' ? 'group' : 'private';
-      try {
-        await api.companionSend({
-          conversation_id: target.conversation_id,
-          kind,
-          text: companionReplyText(message.content, kind),
-          reply_to: target.bridge_msg_id || undefined,
-          sender_uin: target.sender_uin || undefined,
-          sender_name: target.sender_name || undefined
-        });
-        sentAny = true;
-        log(`[companion] 已自动回复 ${target.conversation_id}`);
-      } catch (error) {
-        log(`[companion] 自动回复失败：${error.message}`);
-      }
-    }
-
-    trimState();
-    saveState();
-    await sleep(300);
-  }
-}
-
 async function run() {
   ensureInitialMessage();
   log(`[boot] ${config.id} model=${config.model} pause_max=${config.pauseMaxMinutes}min`);
+
   let toolMode = state.toolMode || 'auto';
   let textIdleRounds = 0;
   let nativeProbeAfter = 0;
@@ -709,9 +425,7 @@ process.on('unhandledRejection', (reason) => {
   log(`[unhandled] ${reason?.stack || reason}`);
 });
 
-const entry = config.mode === 'companion' ? runCompanion : run;
-
-entry().catch((error) => {
+run().catch((error) => {
   log(`[fatal] ${error.stack || error.message}`);
   process.exit(1);
 });

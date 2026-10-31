@@ -17,9 +17,6 @@ const events = require('../events');
 const inbox = require('../inbox');
 const logger = require('../logger');
 const llm = require('../llm');
-const toolkits = require('../toolkits');
-const companion = require('../companion');
-const prompts = require('../prompts');
 const { formatBytes, nowIso, formatDate, tailFileLines } = require('../util');
 
 const router = express.Router();
@@ -27,12 +24,6 @@ const router = express.Router();
 const upload = multer({
   dest: config.uploadsDir,
   limits: { fileSize: 300 * 1024 * 1024, files: 50 }
-});
-
-// 预设工具集：GitHub release 压缩包（zip / tar.gz / tar）
-const uploadToolkit = multer({
-  dest: config.uploadsDir,
-  limits: { fileSize: 1024 * 1024 * 1024, files: 1 }
 });
 
 function asyncHandler(fn) {
@@ -64,201 +55,14 @@ function recentEvents(limit = 30) {
   );
 }
 
-// ---------- 初始化向导与可选鉴权 ----------
-router.get('/setup', (req, res) => {
-  res.render('setup', {
-    title: '初始化',
-    active: 'setup',
-    defaultMode: db.getSetting('default_mode', 'research'),
-    panelToken: db.getSetting('panel_token', ''),
-    completed: db.getSetting('setup_completed', '0') === '1',
-    error: req.query.error ? String(req.query.error) : null
-  });
-});
-
-router.post('/setup', (req, res) => {
-  const mode = req.body.default_mode === 'companion' ? 'companion' : 'research';
-  const token = String(req.body.panel_token || '').trim();
-  db.setSetting('default_mode', mode);
-  db.setSetting('panel_token', token);
-  db.setSetting('setup_completed', '1');
-  events.addEvent(null, 'setup', `初始化完成：默认模式 ${mode === 'companion' ? '陪伴' : '研究'}，面板鉴权${token ? '已启用' : '未启用'}。`);
-  if (token) {
-    res.setHeader('Set-Cookie', `ea_panel=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax`);
-  }
-  res.redirect('/');
-});
-
-router.get('/login', (req, res) => {
-  res.render('login', {
-    title: '登录',
-    active: 'login',
-    error: req.query.error ? String(req.query.error) : null
-  });
-});
-
-router.post('/login', (req, res) => {
-  const token = db.getSetting('panel_token', '');
-  const input = String(req.body.token || '').trim();
-  if (!token || input === token) {
-    res.setHeader('Set-Cookie', `ea_panel=${encodeURIComponent(token || input)}; Path=/; HttpOnly; SameSite=Lax`);
-    return res.redirect('/');
-  }
-  return res.redirect(`/login?error=${encodeURIComponent('口令不正确')}`);
-});
-
-router.get('/logout', (req, res) => {
-  res.setHeader('Set-Cookie', 'ea_panel=; Path=/; Max-Age=0');
-  res.redirect('/login');
-});
-
-// ---------- 陪伴面板 ----------
-router.get('/companion', (req, res) => {
-  const list = db.all(
-    `SELECT a.*, p.name AS provider_name,
-       (SELECT COUNT(*) FROM companion_messages m WHERE m.agent_id = a.id AND m.direction = 'in') AS incoming,
-       (SELECT COUNT(*) FROM companion_messages m WHERE m.agent_id = a.id AND m.direction = 'out') AS outgoing,
-       (SELECT COUNT(DISTINCT conversation_id) FROM companion_messages m WHERE m.agent_id = a.id) AS conversations,
-       (SELECT MAX(created_at) FROM companion_messages m WHERE m.agent_id = a.id) AS last_message_at
-     FROM agents a LEFT JOIN providers p ON p.id = a.provider_id
-     WHERE a.mode = 'companion'
-     ORDER BY a.seq ASC`
-  );
-  const bindings = {};
-  for (const item of list) {
-    bindings[item.id] = companion.bindingOf(item.id);
-  }
-  res.render('companion', {
-    title: '陪伴',
-    active: 'companion',
-    list,
-    bindings,
-    managers: companion.listManagers(),
-    mode: 'list',
-    message: req.query.message ? String(req.query.message) : null,
-    error: req.query.error ? String(req.query.error) : null
-  });
-});
-
-router.post('/managers', (req, res) => {
-  try {
-    companion.registerManager({
-      kind: req.body.kind,
-      account_id: req.body.account_id,
-      label: req.body.label,
-      note: req.body.note,
-      source: 'platform'
-    });
-    res.redirect('/companion?message=' + encodeURIComponent('已登记管理者账号'));
-  } catch (error) {
-    res.redirect('/companion?error=' + encodeURIComponent(`登记失败：${error.message}`));
-  }
-});
-
-router.post('/managers/:id/delete', (req, res) => {
-  try {
-    companion.removeManager(req.params.id);
-    res.redirect('/companion?message=' + encodeURIComponent('已删除登记'));
-  } catch (error) {
-    res.redirect('/companion?error=' + encodeURIComponent(`删除失败：${error.message}`));
-  }
-});
-
-router.get('/companion/:id', asyncHandler(async (req, res) => {
-  const agent = agents.getAgentWithProvider(req.params.id);
-  if (!agent || agent.mode !== 'companion') {
-    return res.status(404).render('error', { title: '未找到', message: '陪伴 AI 不存在' });
-  }
-  const conversations = companion.recentConversations(agent.id, 40);
-  const activeConversation = String(req.query.conversation || (conversations[0]?.conversation_id || ''));
-  const messages = activeConversation
-    ? companion.conversationMessages(agent.id, activeConversation, 300)
-    : [];
-  const binding = companion.bindingOf(agent.id);
-  const stats = companion.stats(agent.id);
-  res.render('companion', {
-    title: agent.id,
-    active: 'companion',
-    list: null,
-    agent,
-    mode: 'chat',
-    conversations,
-    activeConversation,
-    messages,
-    binding,
-    stats,
-    crashLimit: agents.effectiveCrashLimit(agent),
-    noVncUrl: `http://127.0.0.1:${config.noVncBasePort + agent.seq}/vnc.html?autoconnect=1&resize=scale`,
-    message: req.query.message ? String(req.query.message) : null,
-    error: req.query.error ? String(req.query.error) : null
-  });
-}));
-
-router.post('/companion/:id/send', asyncHandler(async (req, res) => {
-  const agent = agents.getAgent(req.params.id);
-  if (!agent || agent.mode !== 'companion') {
-    return res.redirect('/companion');
-  }
-  const conversationId = String(req.body.conversation_id || '').trim();
-  const text = String(req.body.text || '').trim();
-  const kind = req.body.kind === 'group' ? 'group' : 'private';
-  if (!conversationId || !text) {
-    return res.redirect(`/companion/${agent.id}?conversation=${encodeURIComponent(conversationId)}&error=${encodeURIComponent('会话和内容不能为空')}`);
-  }
-  try {
-    await companion.sendText(agent, {
-      conversationId,
-      kind,
-      text,
-      replyTo: req.body.reply_to ? String(req.body.reply_to) : null,
-      senderUin: req.body.sender_uin ? String(req.body.sender_uin) : null,
-      senderName: req.body.sender_name ? String(req.body.sender_name) : null
-    });
-    res.redirect(`/companion/${agent.id}?conversation=${encodeURIComponent(conversationId)}&message=${encodeURIComponent('已发送')}`);
-  } catch (error) {
-    res.redirect(`/companion/${agent.id}?conversation=${encodeURIComponent(conversationId)}&error=${encodeURIComponent(`发送失败：${error.message}`)}`);
-  }
-}));
-
-router.get('/companion/:id/qrcode', asyncHandler(async (req, res) => {
-  const agent = agents.getAgent(req.params.id);
-  if (!agent || agent.mode !== 'companion') {
-    return res.status(404).json({ error: { message: '陪伴 AI 不存在' } });
-  }
-  try {
-    const data = await companion.qrcode(agent);
-    res.json({ ok: true, ...data });
-  } catch (error) {
-    res.status(503).json({ error: { message: error.message } });
-  }
-}));
-
-router.post('/companion/:id/qq-restart', asyncHandler(async (req, res) => {
-  const agent = agents.getAgent(req.params.id);
-  if (!agent || agent.mode !== 'companion') return res.redirect('/companion');
-  try {
-    const exec = await docker.client().getContainer(agent.container_id).exec({
-      Cmd: ['sh', '-c', 'pkill -f /opt/QQ/qq || pkill -f QQ || true'],
-      AttachStdout: false,
-      AttachStderr: false
-    });
-    await exec.start({ Detach: true });
-    db.run('UPDATE qq_bindings SET qq_restarts = qq_restarts + 1, updated_at = ? WHERE agent_id = ?', [nowIso(), agent.id]);
-    events.addEvent(agent.id, 'qq_restart_manual', '管理员手动重启 QQ。');
-    res.redirect(`/companion/${agent.id}?message=${encodeURIComponent('已请求重启 QQ')}`);
-  } catch (error) {
-    res.redirect(`/companion/${agent.id}?error=${encodeURIComponent(`重启 QQ 失败：${error.message}`)}`);
-  }
-}));
-
 router.get('/', asyncHandler(async (req, res) => {
-  const list = agents.listAgents('research');
+  const list = agents.listAgents();
   const dockerOk = await docker.isAvailable();
   const totals = db.get(
     `SELECT
-       (SELECT COUNT(*) FROM agents WHERE mode = 'research') AS agents,
-       (SELECT COUNT(*) FROM agents WHERE mode = 'research' AND status = 'dead') AS dead,
-       (SELECT COUNT(*) FROM agents WHERE mode = 'research' AND status != 'dead') AS alive,
+       (SELECT COUNT(*) FROM agents) AS agents,
+       (SELECT COUNT(*) FROM agents WHERE status = 'dead') AS dead,
+       (SELECT COUNT(*) FROM agents WHERE status != 'dead') AS alive,
        (SELECT COUNT(*) FROM requests) AS requests,
        (SELECT COALESCE(SUM(total_tokens),0) FROM requests WHERE kind = 'agent_chat') AS chat_tokens,
        (SELECT COUNT(*) FROM tasks WHERE active = 1) AS tasks,
@@ -280,12 +84,7 @@ router.get('/agents/new', (req, res) => {
     title: '创建 AI',
     active: 'new',
     providers,
-    toolkits: toolkits.list(),
     defaultBalance: config.defaultInitialBalance,
-    defaultMode: req.query.mode === 'companion'
-      ? 'companion'
-      : (req.query.mode === 'research' ? 'research' : db.getSetting('default_mode', 'research')),
-    companionRules: prompts.DEFAULT_COMPANION_RULES,
     error: req.query.error || null
   });
 });
@@ -308,10 +107,6 @@ router.post('/agents', upload.array('corpus', 50), asyncHandler(async (req, res)
       visionModel: req.body.vision_model || null,
       visionBill: req.body.vision_bill === '1',
       manualTasks: req.body.manual_tasks === '1',
-      mode: req.body.mode === 'companion' ? 'companion' : 'research',
-      toolkits: Array.isArray(req.body.toolkits)
-        ? req.body.toolkits
-        : (req.body.toolkits ? [req.body.toolkits] : []),
       uploadNote: req.body.upload_note,
       corpusFiles: req.files || []
     });
@@ -325,48 +120,6 @@ router.post('/agents', upload.array('corpus', 50), asyncHandler(async (req, res)
       }
     }
     res.redirect(`/agents/new?error=${encodeURIComponent(error.message)}`);
-  }
-}));
-
-router.get('/toolkits', (req, res) => {
-  res.render('toolkits', {
-    title: '预设工具',
-    active: 'toolkits',
-    list: toolkits.list(),
-    message: req.query.message ? String(req.query.message) : null,
-    error: req.query.error ? String(req.query.error) : null
-  });
-});
-
-router.post('/toolkits', uploadToolkit.single('archive'), asyncHandler(async (req, res) => {
-  const file = req.file;
-  try {
-    if (!file) throw new Error('请选择要上传的压缩包');
-    const info = toolkits.install({
-      archivePath: file.path,
-      originalName: file.originalname,
-      name: req.body.name
-    });
-    res.redirect(`/toolkits?message=${encodeURIComponent(`工具集 ${info.name} 已安装`)}`);
-  } catch (error) {
-    res.redirect(`/toolkits?error=${encodeURIComponent(error.message)}`);
-  } finally {
-    if (file?.path) {
-      try {
-        fs.unlinkSync(file.path);
-      } catch {
-        // ignore
-      }
-    }
-  }
-}));
-
-router.post('/toolkits/:name/delete', asyncHandler(async (req, res) => {
-  try {
-    const name = toolkits.remove(req.params.name);
-    res.redirect(`/toolkits?message=${encodeURIComponent(`工具集 ${name} 已删除`)}`);
-  } catch (error) {
-    res.redirect(`/toolkits?error=${encodeURIComponent(error.message)}`);
   }
 }));
 
@@ -426,7 +179,6 @@ router.get('/agents/:id', asyncHandler(async (req, res) => {
     active: 'overview',
     agent,
     tab,
-    agentToolkits: toolkits.parseAgentToolkits(agent.toolkits),
     currentTask,
     usage,
     requests,
@@ -1013,7 +765,7 @@ router.post('/media', (req, res) => {
 
 router.get('/tasks', (req, res) => {
   const list = tasks.listTasks();
-  const agentList = agents.listAgents('research');
+  const agentList = agents.listAgents();
   const progressRows = db.all(
     `SELECT at.agent_id, at.task_id, at.status, at.attempts, at.completions
        FROM agent_tasks at`

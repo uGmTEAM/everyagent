@@ -22,16 +22,52 @@
     <p>还没有 AI。先到 <a href="/providers">供应商</a> 配置 DeepSeek API Key，再到 <a href="/agents/new">创建 AI</a>。</p>
   </div>
 <% } else { %>
-  <% var researchAgents = agents.filter(function (a) { return a.mode !== 'companion'; }); %>
-  <% var companionAgents = agents.filter(function (a) { return a.mode === 'companion'; }); %>
-  <h2>研究模式 AI（<%= researchAgents.length %>）</h2>
-  <%- include('partials/agents_table', { rows: researchAgents }) %>
-  <h2>陪伴模式 AI（<%= companionAgents.length %>）</h2>
-  <% if (!companionAgents.length) { %>
-    <div class="panel muted">还没有陪伴 AI。可在 <a href="/agents/new?mode=companion">创建陪伴 AI</a> 中添加。</div>
-  <% } else { %>
-    <%- include('partials/agents_table', { rows: companionAgents }) %>
-  <% } %>
+<table>
+  <thead>
+    <tr>
+      <th>编号</th>
+      <th>状态</th>
+      <th>外网</th>
+      <th>余额</th>
+      <th>当前任务</th>
+      <th>模型</th>
+      <th>供应商</th>
+      <th>请求</th>
+      <th>tokens</th>
+      <th>创建时间</th>
+      <th>操作</th>
+    </tr>
+  </thead>
+  <tbody>
+    <% agents.forEach(function (a) { %>
+      <tr>
+        <td class="nowrap"><a href="/agents/<%= a.id %>"><%= a.id %></a></td>
+        <td class="nowrap"><span class="badge <%= statusClass(a.status) %>"><%= statusText(a.status) %></span></td>
+        <td class="nowrap"><%= a.allow_internet ? '允许' : '禁止' %></td>
+        <td class="right nowrap"><%= a.unlimited_tokens ? '无限' : fmtInt(a.balance) %></td>
+        <td><%= a.task_title || '无' %></td>
+        <td class="nowrap"><%= a.model %></td>
+        <td class="nowrap"><%= a.provider_name || '未配置' %></td>
+        <td class="right"><%= fmtInt(a.request_count) %></td>
+        <td class="right"><%= fmtInt(a.total_tokens) %></td>
+        <td class="nowrap"><%= fmtDate(a.created_at) %></td>
+        <td class="nowrap">
+          <a class="btn light" href="/agents/<%= a.id %>?tab=usage">充值</a>
+          <% if (a.status === 'created') { %>
+            <form class="inline" method="post" action="/agents/<%= a.id %>/start">
+              <button class="light" type="submit">启动</button>
+            </form>
+          <% } %>
+          <% if (a.status === 'paused_disk') { %>
+            <form class="inline" method="post" action="/agents/<%= a.id %>/resume">
+              <button class="light" type="submit">恢复</button>
+            </form>
+          <% } %>
+        </td>
+      </tr>
+    <% }); %>
+  </tbody>
+</table>
 <% } %>
 
 <h2>最近事件</h2>

@@ -6,26 +6,13 @@
   <title><%= title %> · EveryAgent</title>
   <link rel="stylesheet" href="/style.css">
 </head>
-<body class="mode-<%= (typeof panelMode !== 'undefined' && panelMode === 'companion') ? 'companion' : 'research' %>">
-<% var currentMode = (typeof panelMode !== 'undefined' && panelMode === 'companion') ? 'companion' : 'research'; %>
+<body>
 <header class="topbar">
   <div class="brand">EveryAgent</div>
-  <% if (currentMode === 'companion') { %>
-  <nav>
-    <a href="/companion" class="<%= active === 'companion' ? 'on' : '' %>">陪伴总览</a>
-    <a href="/agents/new?mode=companion" class="<%= active === 'new' ? 'on' : '' %>">创建陪伴 AI</a>
-    <a href="/inbox" class="<%= active === 'inbox' ? 'on' : '' %>">信息<% if (typeof unreadCount !== 'undefined' && unreadCount > 0) { %><span class="badge"><%= unreadCount %></span><% } %></a>
-    <a href="/toolkits" class="<%= active === 'toolkits' ? 'on' : '' %>">预设工具</a>
-    <a href="/providers" class="<%= active === 'providers' ? 'on' : '' %>">供应商</a>
-    <a href="/logs" class="<%= active === 'logs' ? 'on' : '' %>">日志</a>
-    <a href="/setup" class="<%= active === 'setup' ? 'on' : '' %>">设置</a>
-  </nav>
-  <% } else { %>
   <nav>
     <a href="/" class="<%= active === 'overview' ? 'on' : '' %>">总览</a>
     <a href="/inbox" class="<%= active === 'inbox' ? 'on' : '' %>">信息<% if (typeof unreadCount !== 'undefined' && unreadCount > 0) { %><span class="badge"><%= unreadCount %></span><% } %></a>
     <a href="/agents/new" class="<%= active === 'new' ? 'on' : '' %>">创建 AI</a>
-    <a href="/toolkits" class="<%= active === 'toolkits' ? 'on' : '' %>">预设工具</a>
     <a href="/providers" class="<%= active === 'providers' ? 'on' : '' %>">供应商</a>
     <a href="/judge" class="<%= active === 'judge' ? 'on' : '' %>">Judge</a>
     <a href="/oracle" class="<%= active === 'oracle' ? 'on' : '' %>">Oracle</a>
@@ -37,39 +24,5 @@
     <a href="/logs" class="<%= active === 'logs' ? 'on' : '' %>">日志</a>
     <a href="/stats" class="<%= active === 'stats' ? 'on' : '' %>">统计</a>
   </nav>
-  <% } %>
-  <div class="mode-switch" title="切换研究 / 陪伴模式">
-    <a href="/?mode=research" class="<%= currentMode === 'research' ? 'on' : '' %>">研究</a>
-    <a href="/companion?mode=companion" class="<%= currentMode === 'companion' ? 'on' : '' %>">陪伴</a>
-  </div>
 </header>
-<script>
-(function () {
-  var body = document.body;
-  var current = body.className.indexOf('mode-companion') >= 0 ? 'companion' : 'research';
-  var key = 'ea_mode_prev';
-  var prev = null;
-  try {
-    prev = sessionStorage.getItem(key);
-    sessionStorage.setItem(key, current);
-  } catch (error) { /* 隐私模式下无 sessionStorage，忽略 */ }
-
-  // 跨页切换模式：新页面从上一模式的底色渐变到当前主题色，顶栏文字淡入。
-  if (prev && prev !== current) {
-    body.classList.add('mode-anim', 'topbar-fade');
-    body.setAttribute('data-mode-from', prev);
-  }
-
-  var links = document.querySelectorAll('.mode-switch a');
-  Array.prototype.forEach.call(links, function (link) {
-    link.addEventListener('click', function (event) {
-      var target = link.getAttribute('href').indexOf('companion') >= 0 ? 'companion' : 'research';
-      if (target === current) return;
-      event.preventDefault();
-      body.classList.add('page-fade-out');
-      window.setTimeout(function () { window.location.href = link.href; }, 260);
-    });
-  });
-})();
-</script>
 <main>

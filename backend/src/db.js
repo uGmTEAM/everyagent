@@ -188,51 +188,6 @@ CREATE TABLE IF NOT EXISTS deaths (
   created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS companion_messages (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  agent_id TEXT NOT NULL,
-  bridge_msg_id TEXT,
-  conversation_id TEXT NOT NULL,
-  conversation_kind TEXT NOT NULL DEFAULT 'private',
-  conversation_name TEXT,
-  sender_uin TEXT,
-  sender_name TEXT,
-  direction TEXT NOT NULL DEFAULT 'in',
-  content TEXT NOT NULL,
-  segments_json TEXT,
-  needs_reply INTEGER NOT NULL DEFAULT 0,
-  delivered_at TEXT,
-  created_at TEXT NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_companion_msg_bridge
-  ON companion_messages(agent_id, bridge_msg_id) WHERE bridge_msg_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_companion_msg_agent
-  ON companion_messages(agent_id, id DESC);
-CREATE INDEX IF NOT EXISTS idx_companion_msg_conv
-  ON companion_messages(agent_id, conversation_id, id DESC);
-
--- 陪伴 AI 的 QQ 登录/桥状态（每个陪伴 AI 独立 QQ 号）
-CREATE TABLE IF NOT EXISTS qq_bindings (
-  agent_id TEXT PRIMARY KEY,
-  uin TEXT,
-  logged_in INTEGER NOT NULL DEFAULT 0,
-  bridge_ready INTEGER NOT NULL DEFAULT 0,
-  last_error TEXT,
-  qq_restarts INTEGER NOT NULL DEFAULT 0,
-  last_check_at TEXT,
-  updated_at TEXT
-);
-
--- 陪伴桥的拉取游标与运行状态（后端常驻轮询，保证关掉面板也不漏消息）
-CREATE TABLE IF NOT EXISTS companion_state (
-  agent_id TEXT PRIMARY KEY,
-  cursor TEXT,
-  bridge_reachable INTEGER NOT NULL DEFAULT 0,
-  last_poll_at TEXT,
-  last_error TEXT,
-  updated_at TEXT
-);
-
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -329,36 +284,6 @@ CREATE INDEX IF NOT EXISTS idx_judge_memory_task ON judge_memory(agent_id, task_
 CREATE INDEX IF NOT EXISTS idx_admin_messages_agent ON admin_messages(agent_id, delivered_at);
 CREATE INDEX IF NOT EXISTS idx_inbox_unread ON inbox(read_at, id DESC);
 CREATE INDEX IF NOT EXISTS idx_asr_usage_agent_day ON speech_recognition_usage(agent_id, day);
-
-CREATE TABLE IF NOT EXISTS agent_reminders (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  agent_id TEXT NOT NULL,
-  title TEXT NOT NULL DEFAULT '',
-  message TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'once',
-  schedule_json TEXT NOT NULL DEFAULT '{}',
-  next_run_at TEXT NOT NULL,
-  last_run_at TEXT,
-  run_count INTEGER NOT NULL DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'pending',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_agent_reminders_due ON agent_reminders(status, next_run_at);
-CREATE INDEX IF NOT EXISTS idx_agent_reminders_agent ON agent_reminders(agent_id, status, id DESC);
-
-CREATE TABLE IF NOT EXISTS manager_accounts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind TEXT NOT NULL,
-  account_id TEXT NOT NULL,
-  label TEXT NOT NULL DEFAULT '',
-  note TEXT NOT NULL DEFAULT '',
-  source TEXT NOT NULL DEFAULT 'platform',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE(kind, account_id)
-);
 `;
 
 function ensureColumn(table, column, definition) {
@@ -394,8 +319,6 @@ function init() {
   ensureColumn('agents', 'persona', 'TEXT');
   // inline：规则直接写进系统提示（历史 AI 保持原行为）；file：规则写入容器根目录 /PLATFORM_RULES.md
   ensureColumn('agents', 'prompt_mode', "TEXT NOT NULL DEFAULT 'inline'");
-  ensureColumn('agents', 'toolkits', 'TEXT');
-  ensureColumn('agents', 'mode', "TEXT NOT NULL DEFAULT 'research'");
   ensureColumn('providers', 'vision_models', "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn('submissions', 'fingerprint', 'TEXT');
   ensureColumn('providers', 'multimodal_models', "TEXT NOT NULL DEFAULT '[]'");

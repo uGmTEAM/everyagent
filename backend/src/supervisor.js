@@ -85,22 +85,6 @@ async function handleCrash(agent) {
 
   const limit = agents.effectiveCrashLimit(current);
   if (limit !== null && attempts > limit) {
-    if (current.mode === 'companion') {
-      // 陪伴 AI 崩溃超限：不重启、不死亡，置 suspended 并在面板告警（不外推）。
-      db.run("UPDATE agents SET status = 'suspended' WHERE id = ?", [agent.id]);
-      addEvent(agent.id, 'crash_suspended', `连续 ${limit} 次重启失败，已暂停自动重启。`);
-      try {
-        const inboxModule = require('./inbox');
-        inboxModule.addImportant(
-          agent.id,
-          '陪伴 AI 已暂停自动重启',
-          `${agent.id} 连续 ${limit} 次崩溃重启失败，平台已停止自动重启（不会死亡）。请在面板确认原因后手动重启。`
-        );
-      } catch {
-        // 告警失败不影响主流程
-      }
-      return;
-    }
     addEvent(agent.id, 'crash_death', `连续 ${limit} 次重启失败，判定死亡。`);
     await death.finalizeAgent(agent.id, 'crash').catch((error) => {
       addEvent(agent.id, 'death_error', `崩溃死亡处理失败：${error.message}`);
