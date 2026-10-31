@@ -383,7 +383,9 @@
       var multimodal = selectedModelType() === 'multimodal';
       mainOption.disabled = !multimodal;
       if (!multimodal && modeSelect.value === 'main') {
-        modeSelect.value = 'none';
+        // 陪伴模式禁用「不启用」，主模型不是多模态时退回共用识图。
+        var noneOption = modeSelect.querySelector('option[value="none"]');
+        modeSelect.value = (noneOption && noneOption.disabled) ? 'shared' : 'none';
       }
     }
 

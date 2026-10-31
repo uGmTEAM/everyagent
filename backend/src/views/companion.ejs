@@ -1,0 +1,265 @@
+<%- include('partials/header') %>
+
+<% if (message) { %>
+  <div class="notice ok"><%= message %></div>
+<% } %>
+<% if (error) { %>
+  <div class="notice error"><%= error %></div>
+<% } %>
+
+<% if (mode === 'list') { %>
+  <h1>陪伴总览</h1>
+  <p class="muted small">
+    陪伴 AI 通过 QQ 与人对话：私聊必回，群聊只在被 @ 时回复。AI 崩溃时容器会连同 QQ 一起关闭；QQ 进程崩溃不计入 AI 崩溃次数，由平台自动重启/切换。
+  </p>
+
+  <% if (!list.length) { %>
+    <div class="panel">
+      <p>还没有陪伴 AI。到 <a href="/agents/new?mode=companion">创建陪伴 AI</a> 添加一个，创建后固定为无限额度、启用虚拟屏、崩溃重启上限 5 次。</p>
+    </div>
+  <% } else { %>
+    <div class="companion-cards">
+      <% list.forEach(function (a) { %>
+        <% var b = bindings[a.id] || {}; %>
+        <div class="companion-card">
+          <div class="companion-card-head">
+            <a class="companion-card-title" href="/companion/<%= a.id %>"><%= a.id %></a>
+            <span class="badge <%= statusClass(a.status) %>"><%= statusText(a.status) %></span>
+          </div>
+          <div class="companion-card-body">
+            <div class="meta-row"><span class="k">QQ</span><span><%= b.uin || '未登录' %></span></div>
+            <div class="meta-row"><span class="k">通讯桥</span><span><%= b.bridge_ready ? '就绪' : (b.last_error ? '异常' : '未连接') %></span></div>
+            <div class="meta-row"><span class="k">QQ 重启</span><span><%= fmtInt(b.qq_restarts || 0) %> 次</span></div>
+            <div class="meta-row"><span class="k">会话</span><span><%= fmtInt(a.conversations || 0) %></span></div>
+            <div class="meta-row"><span class="k">收 / 发</span><span><%= fmtInt(a.incoming || 0) %> / <%= fmtInt(a.outgoing || 0) %></span></div>
+            <div class="meta-row"><span class="k">模型</span><span><%= a.model %></span></div>
+            <div class="meta-row"><span class="k">最后消息</span><span><%= a.last_message_at ? fmtDate(a.last_message_at) : '无' %></span></div>
+          </div>
+          <div class="companion-card-actions">
+            <a class="btn" href="/companion/<%= a.id %>">进入面板</a>
+            <% if (a.status === 'created' || a.status === 'suspended') { %>
+              <form class="inline" method="post" action="/agents/<%= a.id %>/start">
+                <button class="light" type="submit"><%= a.status === 'suspended' ? '恢复启动' : '启动' %></button>
+              </form>
+            <% } %>
+            <% if (a.status === 'paused_disk') { %>
+              <form class="inline" method="post" action="/agents/<%= a.id %>/resume">
+                <button class="light" type="submit">恢复</button>
+              </form>
+            <% } %>
+          </div>
+        </div>
+      <% }); %>
+    </div>
+  <% } %>
+
+  <% var managerList = (typeof managers !== 'undefined' && managers) ? managers : []; %>
+  <div class="panel manager-panel">
+    <h2>管理者账号登记</h2>
+    <p class="muted small">
+      QQ 或邮箱消息只有与这里登记的账号一致时才视为管理者（账号本身无法伪装，不用选类型，含 @ 自动识别为邮箱）。创建 AI 时也能填入，或在「设置」页统一维护。AI 通过平台核实身份后，也可以用 manager_register 工具补充登记。
+    </p>
+    <% if (!managerList.length) { %>
+      <p class="muted small">还没有登记任何账号。建议先登记你自己的 QQ 号与邮箱。</p>
+    <% } else { %>
+      <table class="manager-table">
+        <thead>
+          <tr><th>类型</th><th>账号</th><th>备注</th><th>来源</th><th>登记时间</th><th></th></tr>
+        </thead>
+        <tbody>
+          <% managerList.forEach(function (m) { %>
+            <tr>
+              <td><span class="badge"><%= m.kind === 'qq' ? 'QQ' : '邮箱' %></span></td>
+              <td><code><%= m.account_id %></code></td>
+              <td><%= m.label || '' %><% if (m.note) { %><br><span class="muted small"><%= m.note %></span><% } %></td>
+              <td><%= m.source === 'ai' ? 'AI 登记' : '平台登记' %></td>
+              <td class="muted small"><%= fmtDate(m.created_at) %></td>
+              <td>
+                <form class="inline" method="post" action="/managers/<%= m.id %>/delete">
+                  <button class="light" type="submit">删除</button>
+                </form>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    <% } %>
+    <form class="manager-form" method="post" action="/managers">
+      <input name="account_id" placeholder="QQ 号或邮箱（含 @ 视为邮箱）" required>
+      <input name="label" placeholder="备注名（可选）">
+      <input name="note" placeholder="说明（可选）">
+      <button type="submit">登记</button>
+    </form>
+  </div>
+<% } else { %>
+  <% var b = binding || {}; %>
+  <% var crashed = agent.status === 'suspended'; %>
+  <% var offline = agent.status === 'running' && !b.logged_in; %>
+  <div class="companion-shell">
+    <aside class="companion-side">
+      <div class="companion-side-head">
+        <a class="companion-agent" href="/companion/<%= agent.id %>"><%= agent.id %></a>
+        <span class="badge <%= statusClass(agent.status) %>"><%= statusText(agent.status) %></span>
+      </div>
+      <div class="companion-side-meta">
+        <div class="meta-row"><span class="k">模型</span><span><%= agent.model %></span></div>
+        <div class="meta-row"><span class="k">QQ</span><span><%= b.uin || '未登录' %></span></div>
+        <div class="meta-row"><span class="k">重启上限</span><span><%= crashLimit === null ? '不限' : crashLimit + ' 次' %></span></div>
+        <div class="meta-row"><span class="k">会话</span><span><%= fmtInt(stats.conversations) %></span></div>
+        <div class="meta-row"><span class="k">收 / 发</span><span><%= fmtInt(stats.incoming) %> / <%= fmtInt(stats.outgoing) %></span></div>
+      </div>
+
+      <h3>会话</h3>
+      <div class="conversation-list">
+        <% if (!conversations.length) { %>
+          <div class="muted small">还没有收到消息。</div>
+        <% } %>
+        <% conversations.forEach(function (c) { %>
+          <% var active = c.conversation_id === activeConversation; %>
+          <a class="conversation-item <%= active ? 'on' : '' %>"
+             href="/companion/<%= agent.id %>?conversation=<%= encodeURIComponent(c.conversation_id) %>">
+            <div class="conversation-name">
+              <span><%= c.conversation_name || c.conversation_id %></span>
+              <span class="badge"><%= c.conversation_kind === 'group' ? '群' : c.conversation_kind === 'channel' ? '频道' : c.conversation_kind === 'system' ? '提醒' : '私聊' %></span>
+            </div>
+            <div class="conversation-meta">
+              <span><%= fmtInt(c.message_count) %> 条</span>
+              <span><%= fmtDate(c.last_at) %></span>
+            </div>
+          </a>
+        <% }); %>
+      </div>
+
+      <div class="companion-side-links">
+        <a href="/companion">返回总览</a>
+        <a href="/agents/<%= agent.id %>">AI 详情</a>
+        <a href="<%= noVncUrl %>" target="_blank" rel="noopener">打开虚拟桌面</a>
+      </div>
+    </aside>
+
+    <section class="companion-main">
+      <div class="companion-topbar">
+        <div class="companion-topbar-left">
+          <span class="badge <%= b.logged_in ? 'status-running' : 'status-created' %>">QQ <%= b.logged_in ? '在线' : '离线' %></span>
+          <span class="muted small">通讯桥 <%= b.bridge_ready ? '就绪' : '未连接' %> · QQ 重启 <%= fmtInt(b.qq_restarts || 0) %> 次</span>
+        </div>
+        <div class="companion-topbar-right">
+          <button class="light" type="button" id="qr-button">二维码</button>
+          <form class="inline" method="post" action="/companion/<%= agent.id %>/qq-restart">
+            <button class="light" type="submit">重启 QQ</button>
+          </form>
+        </div>
+      </div>
+
+      <% if (crashed) { %>
+        <div class="alert-bar">
+          <strong>陪伴 AI 已暂停自动重启。</strong>
+          连续 <%= crashLimit === null ? '多' : crashLimit %> 次重启失败，平台已停止拉起该容器。修复后可点下方「恢复启动」。排查信息可在 <a href="/inbox">信息</a> 查看。
+        </div>
+      <% } else if (offline) { %>
+        <div class="alert-bar">
+          <strong>QQ 离线。</strong>
+          平台会自动重启/切换 QQ 进程，通常无需处理；若长时间离线，点右上「二维码」扫码登录，或手动「重启 QQ」。
+        </div>
+      <% } %>
+      <% if (b.last_error) { %>
+        <div class="notice error small">最近错误：<%= b.last_error %></div>
+      <% } %>
+
+      <div class="hint-bar">
+        提示：AI 崩溃时容器会连同 QQ 一起关闭（QQ 无法脱离 AI 单独运行）；QQ 进程崩溃不影响 AI，平台会自动重启或切换账号。
+      </div>
+
+      <% if (crashed) { %>
+        <div class="panel">
+          <form method="post" action="/agents/<%= agent.id %>/start">
+            <button type="submit">恢复启动</button>
+          </form>
+        </div>
+      <% } %>
+
+      <div class="companion-chat">
+        <% if (!activeConversation) { %>
+          <div class="chat-empty">选择左侧会话查看聊天记录。</div>
+        <% } else if (!messages.length) { %>
+          <div class="chat-empty">该会话还没有消息。</div>
+        <% } %>
+        <% messages.forEach(function (m) { %>
+          <div class="chat-row <%= m.direction === 'in' ? 'incoming' : 'outgoing' %>">
+            <div class="chat-bubble">
+              <div class="chat-meta">
+                <span class="chat-who"><%= m.direction === 'in' ? (m.sender_name || m.sender_uin || '对方') : (agent.id + ' · AI') %></span>
+                <span class="chat-time"><%= fmtDate(m.created_at) %></span>
+                <% if (m.direction === 'in' && !m.needs_reply) { %>
+                  <span class="badge">未触发</span>
+                <% } %>
+                <% if (m.conversation_id === '__reminder__') { %>
+                  <span class="badge badge-reminder">定时提醒</span>
+                <% } %>
+              </div>
+              <div class="chat-content"><%= m.content %></div>
+            </div>
+          </div>
+        <% }); %>
+      </div>
+
+      <% var activeMeta = conversations.find(function (c) { return c.conversation_id === activeConversation; }) || {}; %>
+      <% var activeKind = activeMeta.conversation_kind || 'private'; %>
+      <form class="companion-composer" method="post" action="/companion/<%= agent.id %>/send">
+        <input type="hidden" name="conversation_id" value="<%= activeConversation %>">
+        <input type="hidden" name="kind" id="send-kind" value="<%= activeKind %>">
+        <input type="hidden" name="reply_to" value="">
+        <textarea name="text" rows="3" placeholder="<%= activeKind === 'system' ? '平台提醒会话，仅 AI 自己使用，不能回复' : '以管理员身份向该会话发送消息（不影响 AI 的自动回复）' %>" required <%= activeKind === 'system' ? 'disabled' : '' %>></textarea>
+        <div class="composer-actions">
+          <span class="muted small">会话：<%= activeConversation || '未选择' %></span>
+          <button type="submit" <%= activeConversation && activeKind !== 'system' ? '' : 'disabled' %>>发送</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <dialog id="qr-dialog">
+    <div class="qr-box">
+      <h3>扫码登录 QQ</h3>
+      <div class="qr-image" id="qr-image"><span class="muted small">加载中…</span></div>
+      <p class="muted small" id="qr-text">使用手机 QQ 扫描二维码。</p>
+      <form method="dialog"><button class="light">关闭</button></form>
+    </div>
+  </dialog>
+
+  <script>
+    (function () {
+      var kindInput = document.getElementById('send-kind');
+      var conversationInput = document.querySelector('.companion-composer input[name="conversation_id"]');
+      var kindValue = conversationInput ? conversationInput.value : '';
+      // 会话类型来自服务端渲染的隐藏值，缺失时按私聊处理。
+      if (kindInput && !kindInput.value) kindInput.value = 'private';
+
+      var qrButton = document.getElementById('qr-button');
+      var qrDialog = document.getElementById('qr-dialog');
+      var qrImage = document.getElementById('qr-image');
+      var qrText = document.getElementById('qr-text');
+      if (qrButton && qrDialog) {
+        qrButton.addEventListener('click', function () {
+          qrImage.innerHTML = '<span class="muted small">加载中…</span>';
+          qrText.textContent = '使用手机 QQ 扫描二维码。';
+          qrDialog.showModal();
+          fetch('/companion/<%= agent.id %>/qrcode')
+            .then(function (res) { return res.json().then(function (data) { return { ok: res.ok, data: data }; }); })
+            .then(function (result) {
+              if (!result.ok) throw new Error((result.data.error && result.data.error.message) || '获取二维码失败');
+              var base64 = result.data.qr_base64 || '';
+              if (!base64) throw new Error('二维码为空，QQ 可能已登录或未就绪');
+              qrImage.innerHTML = '<img alt="QQ 二维码" src="data:image/png;base64,' + base64 + '">';
+              if (result.data.qr_url) qrText.textContent = '扫码地址：' + result.data.qr_url;
+            })
+            .catch(function (err) {
+              qrImage.innerHTML = '<span class="error-text">' + err.message + '</span>';
+            });
+        });
+      }
+    })();
+  </script>
+<% } %>
+
+<%- include('partials/footer') %>

@@ -1,0 +1,43 @@
+<%- include('partials/header') %>
+
+<h1><%= completed ? '设置' : '初始化' %></h1>
+
+<% if (error) { %>
+  <div class="notice error"><%= error %></div>
+<% } %>
+
+<% if (!completed) { %>
+  <p class="muted">这是第一次启动。选择默认展示的模式，并可选设置面板访问口令。之后可在本页随时修改。</p>
+<% } %>
+
+<form method="post" action="/setup" class="panel">
+  <label>默认模式</label>
+  <div class="checks">
+    <label class="check">
+      <input type="radio" name="default_mode" value="research" <%= defaultMode !== 'companion' ? 'checked' : '' %>>
+      研究模式
+    </label>
+    <label class="check">
+      <input type="radio" name="default_mode" value="companion" <%= defaultMode === 'companion' ? 'checked' : '' %>>
+      陪伴模式
+    </label>
+  </div>
+  <p class="muted small">决定打开面板时默认进入哪一套导航；顶部右侧的开关可随时切换，不影响已有 AI。</p>
+
+  <label>面板访问口令（可选）</label>
+  <input type="text" name="panel_token" value="<%= panelToken %>" placeholder="留空则不鉴权，任何能访问该端口的人都可以进入">
+  <p class="muted small">设置口令后，访问面板需要先登录；留空则完全开放。修改口令后需要重新登录。</p>
+
+  <label>管理者账号（自动填入创建页）</label>
+  <textarea name="manager_accounts" rows="4" placeholder="QQ 号或邮箱，一行一个（也可用逗号/空格分隔）"><%= managerAccounts %></textarea>
+  <p class="muted small">这些账号发来的 QQ / 邮箱消息视为管理者；创建 AI 时会自动填入该列表，也能在创建页临时补充。含 @ 自动识别为邮箱，不用手选类型。清空并保存会删除「平台登记」的账号（AI 自行登记的保留）。</p>
+
+  <p style="margin-top:14px">
+    <button type="submit"><%= completed ? '保存设置' : '完成初始化' %></button>
+    <% if (panelToken) { %>
+      <a class="btn light" href="/logout">退出登录</a>
+    <% } %>
+  </p>
+</form>
+
+<%- include('partials/footer') %>

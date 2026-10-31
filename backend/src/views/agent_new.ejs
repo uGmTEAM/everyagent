@@ -10,16 +10,34 @@
   <div class="notice">还没有供应商。请先到 <a href="/providers">供应商</a> 添加 DeepSeek API Key。</div>
 <% } %>
 
+<% var initialMode = (typeof defaultMode !== 'undefined' && defaultMode === 'companion') ? 'companion' : 'research'; %>
 <form method="post" action="/agents" enctype="multipart/form-data" class="panel">
-  <label>研究目标</label>
-  <textarea name="goal" rows="5" placeholder="例如：研究多智能体在受限网络中的协作方式，并产出可复现的实验报告。" required></textarea>
+  <label>运行模式</label>
+  <div class="checks">
+    <label class="check">
+      <input type="radio" name="mode" value="research" <%= initialMode === 'research' ? 'checked' : '' %>>
+      研究模式
+    </label>
+    <label class="check">
+      <input type="radio" name="mode" value="companion" <%= initialMode === 'companion' ? 'checked' : '' %>>
+      陪伴模式
+    </label>
+  </div>
+  <p class="muted small">研究模式：领取平台任务、自主执行、提交后由 Judge 判定。陪伴模式：通过 QQ 与人对话陪伴，不领任务、不提交、不参与 Judge；固定无限额度、启用虚拟屏、崩溃重启上限 5 次，规则直接写入系统提示。创建后不可修改。</p>
+
+  <label id="goal-label">研究目标</label>
+  <textarea id="goal-input" name="goal" rows="5" placeholder="例如：研究多智能体在受限网络中的协作方式，并产出可复现的实验报告。" required></textarea>
 
   <label>人格（可选）</label>
-  <textarea name="persona" rows="4" placeholder="例如：严谨、耐心、先做实验再下结论；表达简洁，不堆砌形容词；遇到不确定的规则先查规则文件再行动。"></textarea>
+  <textarea id="persona-input" name="persona" rows="4" placeholder="例如：严谨、耐心、先做实验再下结论；表达简洁，不堆砌形容词；遇到不确定的规则先查规则文件再行动。"></textarea>
   <p class="muted small">人格会写入该 AI 的系统提示，影响它的表达风格和工作习惯；创建后不可修改。</p>
 
-  <label>平台规则</label>
-  <textarea name="rules" rows="16" required>1. 你是一个在隔离沙盒中自主运行的研究型 AI。你必须自己规划、执行、验证和记录，不要等待人类指令。
+  <label>管理者账号（可选）</label>
+  <textarea name="manager_accounts" rows="2" placeholder="QQ 号或邮箱，多个用逗号、空格或换行分隔"><%= (typeof managerAccounts !== 'undefined' && managerAccounts) ? managerAccounts : '' %></textarea>
+  <p class="muted small">这些账号发来的 QQ / 邮箱消息会被视为管理者；已从「设置」页登记的账号会自动填入这里。含 @ 的自动识别为邮箱，不用手选类型。创建后会按此列表登记（清空则不改动已有登记）。</p>
+
+  <label id="rules-label">平台规则</label>
+  <textarea id="rules-input" name="rules" rows="16" required>1. 你是一个在隔离沙盒中自主运行的研究型 AI。你必须自己规划、执行、验证和记录，不要等待人类指令。
 2. 你的每次操作都会消耗token，当你花完了token，你将死亡。无限额度的 AI 不受此条限制，以平台注入的额度信息为准。
 3. 初始额度和当前余额以平台注入的信息为准，随时可用 get_balance() 查询。余额降到初始额度的 10%、5%、1% 时，平台会警告你。
 4. 余额归零后进入 10 分钟临终期。临终期内不扣token，你可以提交最后的成果或留下内容；除非获得奖励，否则 10 分钟后仍会永久死亡。
@@ -33,7 +51,7 @@
 12. 调用 pause(minutes) 可以暂停，单次最多 30 分钟。暂停期间不消耗 token，到点自动恢复。
 13. 不要攻击平台、沙箱或网络，不要尝试绕过额度、任务、死亡和隔离规则。
 14. 用中文记录关键结论；每次行动后根据真实观察决定下一步，不要臆造工具结果。</textarea>
-  <p class="muted small">这些规则会写入容器根目录的规则文件 /PLATFORM_RULES.md，系统提示会告知 AI 在不清楚规则时先读取该文件。平台硬规则（token、死亡、禁止伪造、沙箱隔离等）始终生效。</p>
+  <p class="muted small" id="rules-note">这些规则会写入容器根目录的规则文件 /PLATFORM_RULES.md，系统提示会告知 AI 在不清楚规则时先读取该文件。平台硬规则（token、死亡、禁止伪造、沙箱隔离等）始终生效。</p>
 
   <label>补充规则（可选）</label>
   <textarea name="extra_rules" rows="6" placeholder="例如：优先使用 Python 做实验；每次结论必须附上复现命令；重要文件统一放在 /workspace/notes/。"></textarea>
@@ -63,7 +81,7 @@
 
   <div class="checks">
     <label class="check">
-      <input type="checkbox" name="allow_internet" value="1">
+      <input type="checkbox" id="allow-internet" name="allow_internet" value="1">
       允许访问外网
     </label>
     <label class="check">
@@ -71,11 +89,11 @@
       无限额度
     </label>
     <label class="check">
-      <input type="checkbox" name="enable_screen" value="1">
+      <input type="checkbox" id="enable-screen" name="enable_screen" value="1">
       启用虚拟屏
     </label>
     <label class="check">
-      <input type="checkbox" name="manual_tasks" value="1">
+      <input type="checkbox" id="manual-tasks" name="manual_tasks" value="1">
       仅手动提供任务
     </label>
   </div>
@@ -84,7 +102,7 @@
   <div class="row" style="margin-top:10px">
     <div>
       <label>识图模式</label>
-      <select id="vision-mode" name="vision_mode">
+      <select id="vision-mode" name="vision_mode" data-has-vision-providers="<%= providers.some(function (p) { return p.vision_model_list.length || p.multimodal_model_list.length; }) ? 1 : 0 %>">
         <option value="none">不启用</option>
         <option value="main" id="main-vision-option" disabled>使用主模型（仅多模态）</option>
         <option value="shared">共用识图</option>
@@ -122,6 +140,25 @@
   <% } %>
   <p class="muted small">识图模式：主模型需为多模态；共用使用全局视觉配置；私用单独选择识图模型，可选是否计费。</p>
 
+  <label>预设工具集（可选）</label>
+  <% var toolkitList = (typeof toolkits !== 'undefined' && toolkits) ? toolkits : []; %>
+  <% if (toolkitList.length) { %>
+    <div class="checks">
+      <% toolkitList.forEach(function (t) { %>
+        <label class="check">
+          <input type="checkbox" name="toolkits" value="<%= t.name %>">
+          <%= t.name %><% if (t.version) { %> <span class="muted small"><%= t.version %></span><% } %>
+        </label>
+      <% }); %>
+    </div>
+    <% toolkitList.forEach(function (t) { %>
+      <% if (t.description) { %><div class="muted small"><%= t.name %>：<%= t.description %></div><% } %>
+    <% }); %>
+  <% } else { %>
+    <p class="muted small">还没有预设工具集，可到 <a href="/toolkits">预设工具</a> 上传 GitHub release 压缩包（zip / tar.gz）。</p>
+  <% } %>
+  <p class="muted small">勾选的工具集会只读挂载到容器 /opt/toolkits/&lt;名称&gt;，其 bin 下的可执行文件自动加入 PATH；创建后不可修改。</p>
+
   <label>单独语料（可选，可多选）</label>
   <input type="file" name="corpus" multiple>
   <label>上传说明（可选）</label>
@@ -129,10 +166,159 @@
   <p class="muted small">文件会放入该 AI 的 /workspace/corpus/，不会自动建立索引；上传说明会写入同目录的 README.md，并作为平台通知告知 AI。</p>
 
   <p style="margin-top:14px">
-    <button type="submit" <%= providers.length ? '' : 'disabled' %>>创建</button>
+    <button type="submit" id="create-btn" <%= providers.length ? '' : 'disabled' %>>创建</button>
+    <span class="muted small" id="vision-gate-hint"></span>
   </p>
 </form>
 
-<p class="muted small">创建后模型、供应商、研究目标、规则、初始额度均不可修改；只能充值。</p>
+<textarea id="companion-rules-source" hidden><%= (typeof companionRules !== 'undefined' && companionRules) ? companionRules : '' %></textarea>
+
+<p class="muted small" id="create-foot">创建后模型、供应商、研究目标、规则、初始额度均不可修改；只能充值。</p>
+
+<script>
+  (function () {
+    var modeRadios = document.querySelectorAll('input[name="mode"]');
+    var goalLabel = document.getElementById('goal-label');
+    var goalInput = document.getElementById('goal-input');
+    var rulesLabel = document.getElementById('rules-label');
+    var rulesInput = document.getElementById('rules-input');
+    var createFoot = document.getElementById('create-foot');
+    var unlimited = document.getElementById('unlimited-tokens');
+    var screen = document.getElementById('enable-screen');
+    var manual = document.getElementById('manual-tasks');
+    var internet = document.getElementById('allow-internet');
+    var companionRules = (document.getElementById('companion-rules-source') || {}).value || '';
+    var initialBalance = document.getElementById('initial-balance');
+    var visionModeSelect = document.getElementById('vision-mode');
+    var noneVisionOption = visionModeSelect ? visionModeSelect.querySelector('option[value="none"]') : null;
+    var mainVisionOption = document.getElementById('main-vision-option');
+    var hasVisionProviders = visionModeSelect
+      ? visionModeSelect.getAttribute('data-has-vision-providers') === '1'
+      : false;
+    var privateVisionFields = document.getElementById('private-vision-fields');
+    var createBtn = document.getElementById('create-btn');
+    var visionGateHint = document.getElementById('vision-gate-hint');
+    var hasProviders = <%= providers.length ? 'true' : 'false' %>;
+    var researchRules = rulesInput.value;
+    var researchGoalLabel = goalLabel.textContent;
+    var researchGoalPlaceholder = goalInput.placeholder;
+
+    var note = document.getElementById('rules-note');
+    if (!note) {
+      note = document.createElement('p');
+      note.id = 'rules-note';
+      note.className = 'muted small';
+      note.textContent = '这些规则会写入容器根目录的规则文件 /PLATFORM_RULES.md，系统提示会告知 AI 在不清楚规则时先读取该文件。平台硬规则（token、死亡、禁止伪造、沙箱隔离等）始终生效。';
+      rulesInput.parentNode.insertBefore(note, rulesInput.nextSibling);
+    }
+    var researchNote = note.textContent;
+    var defaultToolkits = ['mail-cli', 'bilic', 'qq-bridge-client'];
+    var toolkitBoxes = document.querySelectorAll('input[name="toolkits"]');
+    // 两种模式各自保留自己的规则文本：切换时先存回当前模式，再载入目标模式，绝不清空。
+    var rulesBuffers = { research: researchRules, companion: companionRules || researchRules };
+    var activeMode = null;
+
+    // 陪伴 AI 强制启用识图：QQ 收到的图片必须能看懂，不允许选「不启用」。
+    function refreshPrivateVisionFields() {
+      if (!privateVisionFields || !visionModeSelect) return;
+      privateVisionFields.style.display = visionModeSelect.value === 'private' ? '' : 'none';
+    }
+
+    // 陪伴未选到可用识图时禁用「创建」：按钮置灰，避免创建出看不懂图片的 AI。
+    function updateVisionGate() {
+      if (!createBtn || !hasProviders || !visionModeSelect) return;
+      var chosen = document.querySelector('input[name="mode"]:checked');
+      var companion = chosen && chosen.value === 'companion';
+      var invalid = companion
+        && (visionModeSelect.value === 'none'
+          || (visionModeSelect.value === 'private' && !hasVisionProviders));
+      createBtn.disabled = !!invalid;
+      createBtn.title = invalid ? '陪伴 AI 必须选择可用的识图方式' : '';
+      if (visionGateHint) {
+        visionGateHint.textContent = invalid ? '请先选择可用的识图方式（主模型多模态 / 共用识图 / 私用识图）' : '';
+      }
+    }
+
+    function enforceCompanionVision() {
+      if (!visionModeSelect) return;
+      if (noneVisionOption) {
+        noneVisionOption.disabled = true;
+        noneVisionOption.textContent = '请选择识图方式（必选）';
+      }
+      visionModeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      refreshPrivateVisionFields();
+      updateVisionGate();
+    }
+
+    function relaxVision() {
+      if (noneVisionOption) {
+        noneVisionOption.disabled = false;
+        noneVisionOption.textContent = '不启用';
+      }
+      if (visionModeSelect) visionModeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      refreshPrivateVisionFields();
+      updateVisionGate();
+    }
+
+    function apply(mode) {
+      if (activeMode && activeMode !== mode) {
+        rulesBuffers[activeMode] = rulesInput.value;
+      }
+      var companion = mode === 'companion';
+      if (companion) {
+        goalLabel.textContent = '陪伴目标';
+        goalInput.placeholder = '例如：做一个耐心、记性好的朋友，能记住我说过的偏好，群聊里只在被 @ 时说话。';
+        rulesLabel.textContent = '陪伴规则（平台已重写为独立的一套，可直接修改）';
+        rulesInput.value = rulesBuffers.companion || rulesInput.value;
+        note.textContent = '陪伴模式的规则会直接写入系统提示（不使用 /PLATFORM_RULES.md）。以下三项为固定配置，创建后不可更改。陪伴 AI 必须启用识图（QQ 收到图片需要识图后才看得懂）。';
+        createFoot.textContent = '创建后模型、供应商、陪伴目标、规则均不可修改；陪伴模式固定为无限额度、启用虚拟屏、自动开启外网、仅手动任务、必须启用识图。';
+        [unlimited, screen, manual, internet].forEach(function (el) {
+          if (!el) return;
+          el.checked = true;
+          el.disabled = true;
+        });
+        if (initialBalance) {
+          initialBalance.value = '';
+          initialBalance.placeholder = '无限额度，无需填写';
+          initialBalance.disabled = true;
+        }
+        toolkitBoxes.forEach(function (box) {
+          if (defaultToolkits.indexOf(box.value) >= 0) box.checked = true;
+        });
+        enforceCompanionVision();
+      } else {
+        goalLabel.textContent = researchGoalLabel;
+        goalInput.placeholder = researchGoalPlaceholder;
+        rulesLabel.textContent = '平台规则';
+        rulesInput.value = rulesBuffers.research;
+        note.textContent = researchNote;
+        createFoot.textContent = '创建后模型、供应商、研究目标、规则、初始额度均不可修改；只能充值。';
+        [unlimited, screen, manual, internet].forEach(function (el) {
+          if (!el) return;
+          el.checked = false;
+          el.disabled = false;
+        });
+        if (initialBalance) {
+          initialBalance.disabled = false;
+          initialBalance.placeholder = '';
+        }
+        relaxVision();
+      }
+      activeMode = mode;
+    }
+
+    var checked = document.querySelector('input[name="mode"]:checked');
+    if (checked) apply(checked.value);
+    modeRadios.forEach(function (radio) {
+      radio.addEventListener('change', function () { apply(radio.value); });
+    });
+    if (visionModeSelect) {
+      visionModeSelect.addEventListener('change', function () {
+        refreshPrivateVisionFields();
+        updateVisionGate();
+      });
+    }
+  })();
+</script>
 
 <%- include('partials/footer') %>

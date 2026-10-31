@@ -21,6 +21,10 @@ credentials.md
 # 发行包 / 压缩包
 *.zip
 *.tar.gz
+mail-cli/bin/
+
+# 第三方源码克隆 / 分析材料（含嵌套 .git，体积大）
+napcatqq-analysis/
 
 # 独立子项目（不在本仓库发行）
 bilibili_client/

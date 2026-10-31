@@ -1,0 +1,55 @@
+<%- include('partials/header') %>
+
+<h1>留言</h1>
+<% if (typeof message !== 'undefined' && message) { %>
+  <div class="notice"><%= message %></div>
+<% } %>
+<% if (typeof error !== 'undefined' && error) { %>
+  <div class="notice error"><%= error %></div>
+<% } %>
+
+<div class="panel">
+  <h3>发送留言</h3>
+  <p class="muted small">可选择发给某一个 AI，或发给全体存活 AI（研究 + 陪伴两种模式）。留言会立即为每个 AI 补 <%= fmtInt(compensation) %> tokens（无限额度的 AI 不补），并在它下一次获取运行时状态时作为「平台通知」强制唤醒送达，只送达一次；死亡或归档中的 AI 不会收到。</p>
+  <form method="post" action="/broadcast">
+    <label>接收对象</label>
+    <select name="target" required>
+      <option value="all">全体（所有存活 AI，共 <%= aliveCount %> 个）</option>
+      <% list.forEach(function (a) { %>
+        <option value="<%= a.id %>"><%= a.id %>（<%= a.mode === 'companion' ? '陪伴' : '研究' %> · <%= statusText(a.status) %>）</option>
+      <% }); %>
+    </select>
+    <label>留言内容</label>
+    <textarea name="content" rows="6" required placeholder="例如：接下来一小时优先处理邮件；或者：平台已更改网络配置，请重新检查外网连通性。"></textarea>
+    <p class="muted small">留言不是任务：AI 不会把它当任务提交给 Judge；需要它回你时，它会在「信息」里用 message_admin 回复。</p>
+    <button type="submit">发送</button>
+  </form>
+</div>
+
+<div class="panel">
+  <h3>最近留言</h3>
+  <% if (!recent.length) { %>
+    <p class="muted">暂无留言。</p>
+  <% } else { %>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>时间</th><th>AI</th><th>内容</th><th>补偿</th><th>送达</th></tr>
+        </thead>
+        <tbody>
+          <% recent.forEach(function (m) { %>
+            <tr>
+              <td class="mono small"><%= fmtDate(m.created_at) %></td>
+              <td class="mono"><%= m.agent_id %></td>
+              <td><pre data-collapse><%= m.content %></pre></td>
+              <td class="small"><%= m.compensation ? fmtInt(m.compensation) : '—' %></td>
+              <td class="small"><%= m.delivered_at ? fmtDate(m.delivered_at) : '未送达' %></td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+  <% } %>
+</div>
+
+<%- include('partials/footer') %>
