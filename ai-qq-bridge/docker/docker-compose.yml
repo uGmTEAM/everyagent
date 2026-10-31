@@ -1,0 +1,23 @@
+services:
+  ai-qq-bridge:
+    build:
+      context: ..
+      args:
+        # 留空则读取官方 linuxConfig.js 取最新 deb；建议填固定 URL 锁版本
+        QQ_DEB_URL: ""
+    image: ai-qq-bridge:latest
+    container_name: ai-qq-bridge
+    restart: unless-stopped
+    # 单容器方案：AI 容器与桥接容器同主机，通过宿主端口或 Docker 网络访问
+    ports:
+      - "3100:3100"   # AI API
+      # - "3000:3000" # OneBot 11 HTTP API（默认关闭）
+      # - "3001:3001" # OneBot 11 正向 WebSocket（默认关闭）
+    environment:
+      BRIDGE_DATA_DIR: /data
+      BRIDGE_LOG_LEVEL: info
+      # 如需鉴权：
+      # BRIDGE_HTTP_TOKEN: change-me
+    volumes:
+      - ../data:/data
+    shm_size: 512m

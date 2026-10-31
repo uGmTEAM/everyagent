@@ -217,10 +217,12 @@ function toDockerPath(value) {
   return String(value).replace(/\\/g, '/');
 }
 
-async function createAgentContainer(agent, { hostWorkspace, hostRulesFile = null }) {
+async function createAgentContainer(agent, { hostWorkspace, hostRulesFile = null, toolkitBinds = [] }) {
   const api = client();
+  const isCompanion = agent.mode === 'companion';
   const internalNetwork = await ensureAgentNetwork(agent.seq);
-  const outboundNetwork = agent.allow_internet
+  // 陪伴 AI 需要直连 QQ 服务器：无论是否勾选外网，都额外接入出网网络。
+  const outboundNetwork = agent.allow_internet || isCompanion
     ? await ensureOutboundNetwork(agent.seq)
     : null;
   const primaryNetwork = outboundNetwork || internalNetwork;
@@ -234,46 +236,70 @@ async function createAgentContainer(agent, { hostWorkspace, hostRulesFile = null
     await api.getContainer(existing.Id).remove({ force: true }).catch(() => {});
   }
 
+  const screenEnabled = isCompanion ? true : Boolean(agent.enable_screen);
+  const bridgePort = config.bridgeBasePort + agent.seq;
+  const bridgePorts = isCompanion
+    ? {
+        '3100/tcp': [{ HostIp: '127.0.0.1', HostPort: String(bridgePort) }]
+      }
+    : {};
+  const exposed = {};
+  if (screenEnabled) exposed['6080/tcp'] = {};
+  if (isCompanion) exposed['3100/tcp'] = {};
+
   const container = await api.createContainer({
     name,
-    Image: config.agentImage,
+    Image: isCompanion ? config.companionImage : config.agentImage,
     Tty: true,
     OpenStdin: false,
-    ExposedPorts: agent.enable_screen ? { '6080/tcp': {} } : {},
+    ExposedPorts: exposed,
     Env: [
       `AGENT_ID=${agent.id}`,
       `AGENT_KEY=${agent.api_key}`,
       `BACKEND_URL=http://egress:${config.backendPort}`,
       'AGENT_CONFIG=/workspace/.agent/config.json',
       'OLLAMA_HOST=http://127.0.0.1:11434',
-      `ENABLE_SCREEN=${agent.enable_screen ? '1' : '0'}`,
+      `ENABLE_SCREEN=${screenEnabled ? '1' : '0'}`,
       `SCREEN_WIDTH=${config.screenWidth}`,
       `SCREEN_HEIGHT=${config.screenHeight}`,
       'DISPLAY=:99',
       'TZ=Asia/Shanghai',
-      'HOME=/root'
+      'HOME=/root',
+      ...(isCompanion
+        ? [
+            'EA_MODE=companion',
+            'BRIDGE_DATA_DIR=/data',
+            'BRIDGE_HOME=/opt/ai-qq-bridge',
+            'BRIDGE_CONFIG=/data/config.json'
+          ]
+        : [])
     ],
     Labels: {
       'ea.role': 'agent',
+      'ea.mode': isCompanion ? 'companion' : 'research',
       'ea.agent-id': agent.id
     },
     HostConfig: {
       Binds: [
         `${toDockerPath(hostWorkspace)}:/workspace`,
         `${toDockerPath(config.tmpWorkspaceDir)}:/tmp_workspace`,
+        ...(isCompanion
+          ? [`${toDockerPath(`${config.workspacesDir}/${agent.id}/.qq`)}:/data`]
+          : []),
         ...(hostRulesFile && fs.existsSync(hostRulesFile)
           ? [`${toDockerPath(hostRulesFile)}:/PLATFORM_RULES.md:ro`]
-          : [])
+          : []),
+        ...toolkitBinds.map((item) => `${toDockerPath(item.host)}:${item.target}:ro`)
       ],
       NanoCpus: config.agentCpuCores * 1_000_000_000,
-      Memory: agent.enable_screen ? config.agentScreenMemoryBytes : config.agentMemoryBytes,
-      MemorySwap: agent.enable_screen ? config.agentScreenMemoryBytes : config.agentMemoryBytes,
+      Memory: screenEnabled ? config.agentScreenMemoryBytes : config.agentMemoryBytes,
+      MemorySwap: screenEnabled ? config.agentScreenMemoryBytes : config.agentMemoryBytes,
       // WebKit/Chromium 在 64MB /dev/shm 下容易崩溃（浏览器窗口只剩标题栏或直接退出）
-      ShmSize: agent.enable_screen ? 512 * 1024 * 1024 : 64 * 1024 * 1024,
+      ShmSize: screenEnabled ? 512 * 1024 * 1024 : 64 * 1024 * 1024,
       PidsLimit: config.agentPidsLimit,
       Init: true,
       AutoRemove: false,
-      PortBindings: {},
+      PortBindings: bridgePorts,
       ExtraHosts: [
         'host.docker.internal:127.0.0.1',
         'gateway.docker.internal:127.0.0.1'

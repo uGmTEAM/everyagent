@@ -2,6 +2,22 @@
 
 <h1><%= agent.id %> <span class="badge <%= statusClass(agent.status) %>"><%= statusText(agent.status) %></span></h1>
 
+<% if (agent.status === 'suspended') { %>
+  <div class="alert-bar" style="border:1px solid #f0b6b6;border-radius:4px;margin-bottom:12px">
+    <strong>已暂停自动重启。</strong>
+    连续 <%= crashLimit === null ? '多' : crashLimit %> 次重启失败，平台已停止拉起该容器（AI 不会死亡，可恢复）。
+    详细告警见 <a href="/inbox">信息</a>；<%= agent.mode === 'companion' ? '修复后到陪伴面板点「恢复启动」' : '修复后点下方「重启容器」' %>。
+  </div>
+<% } %>
+
+<% if (agent.mode === 'companion') { %>
+  <div class="notice">
+    这是陪伴模式 AI：通过 QQ 与人对话，不领取平台任务、不提交、不参与 Judge。
+    <a href="/companion/<%= agent.id %>">打开陪伴面板</a> 查看会话与 QQ 状态。
+    提示：AI 崩溃时容器会连同 QQ 一起关闭（QQ 无法脱离 AI 单独运行）；QQ 进程崩溃不影响 AI，平台会自动重启/切换。
+  </div>
+<% } %>
+
 <div class="grid">
   <div class="stat"><div class="k">余额</div><div class="v"><%= agent.unlimited_tokens ? '无限' : fmtInt(agent.balance) %></div></div>
   <div class="stat"><div class="k">初始额度</div><div class="v"><%= agent.unlimited_tokens ? '无限' : fmtInt(agent.initial_balance) %></div></div>
@@ -13,12 +29,18 @@
 
 <div class="panel">
   <div class="kv">
-    <div class="k">研究目标</div><div><%= agent.goal %></div>
+    <div class="k">运行模式</div><div><%= agent.mode === 'companion' ? '陪伴模式' : '研究模式' %></div>
+    <div class="k"><%= agent.mode === 'companion' ? '陪伴目标' : '研究目标' %></div><div><%= agent.goal %></div>
     <% if (agent.persona) { %>
       <div class="k">人格</div><div><details><summary>查看</summary><pre><%= agent.persona %></pre></details></div>
     <% } %>
     <% if (agent.prompt_mode === 'file') { %>
       <div class="k">规则</div><div>/PLATFORM_RULES.md（容器根目录，AI 可随时读取）</div>
+    <% } else { %>
+      <div class="k">规则</div><div>规则已直接写入系统提示（陪伴模式）</div>
+    <% } %>
+    <% if (typeof agentToolkits !== 'undefined' && agentToolkits.length) { %>
+      <div class="k">预设工具</div><div><%= agentToolkits.map(function (t) { return t.name + (t.version ? ' ' + t.version : ''); }).join('、') %>（只读挂载 /opt/toolkits）</div>
     <% } %>
     <div class="k">模型</div><div><%= agent.model %></div>
     <div class="k">供应商</div><div><%= agent.provider_name || '未配置' %></div>
@@ -26,7 +48,7 @@
     <div class="k">额度模式</div><div><%= agent.unlimited_tokens ? '无限（不会因余额死亡）' : '有限' %></div>
     <div class="k">虚拟屏</div><div><%= agent.enable_screen ? '已启用（noVNC）' : '未启用' %></div>
     <div class="k">识图</div><div><%= visionText %></div>
-    <div class="k">任务模式</div><div><%= agent.manual_tasks ? '仅手动（管理员下发）' : '自动（Judge 生成）' %></div>
+    <div class="k">任务模式</div><div><%= agent.mode === 'companion' ? '不领取平台任务（陪伴模式）' : (agent.manual_tasks ? '仅手动（管理员下发）' : '自动（Judge 生成）') %></div>
     <% if (agent.extra_rules) { %>
       <div class="k">补充规则</div><div><details><summary>查看</summary><pre><%= agent.extra_rules %></pre></details></div>
     <% } %>
@@ -75,6 +97,12 @@
     <div class="k">崩溃重启上限</div><div><%= crashLimit === null ? '无限' : `${crashLimit} 次` %>（<%= crashSource %>）</div>
     <div class="k">当前崩溃计数</div><div><%= agent.crash_attempts %></div>
   </div>
+  <% if (agent.mode === 'companion') { %>
+    <p class="muted small">陪伴模式的崩溃重启上限固定为 <%= crashLimit === null ? '无限' : `${crashLimit} 次` %>，创建后不可修改；超过上限会暂停自动重启并在面板告警（AI 不会死亡）。</p>
+    <form class="row" method="post" action="/agents/<%= agent.id %>/crash-reset" style="margin-top:8px">
+      <div class="shrink"><button class="light" type="submit">重置崩溃计数</button></div>
+    </form>
+  <% } else { %>
   <form class="row" method="post" action="/agents/<%= agent.id %>/crash-limit" style="margin-top:12px">
     <div><label>提高到（只能增加）</label><input type="number" name="limit" min="1" step="1" placeholder="例如 5" <%= crashLimit === null ? 'disabled' : '' %>></div>
     <div class="checks" style="align-self:flex-end">
@@ -85,6 +113,7 @@
   <form class="row" method="post" action="/agents/<%= agent.id %>/crash-reset" style="margin-top:8px">
     <div class="shrink"><button class="light" type="submit" <%= agent.status === 'dead' || agent.status === 'finalizing' ? 'disabled' : '' %>>重置崩溃计数</button></div>
   </form>
+  <% } %>
   <p class="muted small">崩溃重启上限只能增加或改为无限，不能减少。修改上限、重置计数和充值都会通过平台通知告知 AI。</p>
 
   <% var cleanOnRestart = Number(agent.clean_on_restart || 0) === 1; %>
@@ -152,7 +181,9 @@
   <% } %>
   <a href="?tab=files" class="<%= tab === 'files' ? 'on' : '' %>">文件</a>
   <a href="?tab=kb" class="<%= tab === 'kb' ? 'on' : '' %>">知识库</a>
-  <a href="?tab=tasks" class="<%= tab === 'tasks' ? 'on' : '' %>">任务</a>
+  <% if (agent.mode !== 'companion') { %>
+    <a href="?tab=tasks" class="<%= tab === 'tasks' ? 'on' : '' %>">任务</a>
+  <% } %>
   <a href="?tab=message" class="<%= tab === 'message' ? 'on' : '' %>">留言</a>
   <a href="?tab=usage" class="<%= tab === 'usage' ? 'on' : '' %>">额度</a>
   <a href="?tab=events" class="<%= tab === 'events' ? 'on' : '' %>">事件</a>
@@ -337,7 +368,7 @@
   </table>
 <% } %>
 
-<% if (tab === 'tasks') { %>
+<% if (tab === 'tasks' && agent.mode !== 'companion') { %>
   <div class="panel">
     <% if (currentTask) { %>
       <div class="kv">

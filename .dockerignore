@@ -1,0 +1,11 @@
+# 陪伴镜像构建上下文（仓库根目录）只需要 ai-qq-bridge 与 agent-image/agent
+data
+bakup
+test-output
+release
+backend/node_modules
+.bilibili_client
+bilibili_client/.login
+.git
+.screenshots
+node_modules

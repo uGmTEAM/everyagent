@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · EveryAgent</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="login-wrap">
+    <form method="post" action="/login" class="panel login-box">
+      <div class="brand" style="margin-bottom:12px">EveryAgent</div>
+      <% if (error) { %>
+        <div class="notice error"><%= error %></div>
+      <% } %>
+      <label>面板口令</label>
+      <input type="password" name="token" autofocus required>
+      <p style="margin-top:14px"><button type="submit">登录</button></p>
+    </form>
+  </div>
+</body>
+</html>

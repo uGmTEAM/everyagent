@@ -1,0 +1,52 @@
+{
+  "http": {
+    "host": "0.0.0.0",
+    "port": 3100,
+    "token": ""
+  },
+  "qq": {
+    "account": "",
+    "password": "",
+    "autoLogin": true,
+    "switchOnKick": true,
+    "dataDir": "",
+    "appDir": "",
+    "quickLoginTimeoutMs": 20000,
+    "qrTimeoutSec": 180,
+    "deviceName": "ai-qq-bridge"
+  },
+  "accounts": [],
+  "storage": {
+    "dir": ""
+  },
+  "media": {
+    "autoDownloadImages": true,
+    "imageTimeoutMs": 20000,
+    "maxDownloadBytes": 104857600,
+    "maxUploadBytes": 209715200
+  },
+  "backfill": {
+    "enabled": true,
+    "maxPeers": 100,
+    "perPeer": 20
+  },
+  "onebot": {
+    "enabled": false,
+    "host": "0.0.0.0",
+    "port": 3000,
+    "token": "",
+    "webhook": "",
+    "websocket": {
+      "enabled": true,
+      "port": 3001
+    },
+    "reverseWebsocket": ""
+  },
+  "log": {
+    "level": "info",
+    "buffer": 500
+  },
+  "features": {
+    "experimentalSocial": false
+  }
+}

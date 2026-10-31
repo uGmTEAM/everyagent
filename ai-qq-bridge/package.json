@@ -1,0 +1,16 @@
+{
+  "name": "ai-qq-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI 通信桥：参考 NapCat 的进程内通信方式，从零实现的 QQ NT 桥接服务",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/index.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "patch": "node scripts/patch-qq.mjs",
+    "selfcheck": "node scripts/selfcheck.mjs"
+  }
+}

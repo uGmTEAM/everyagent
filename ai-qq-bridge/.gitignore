@@ -1,0 +1,4 @@
+data/
+test-output/
+node_modules/
+*.log
