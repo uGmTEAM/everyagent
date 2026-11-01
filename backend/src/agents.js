@@ -108,6 +108,7 @@ function writeAgentConfig(agent) {
     rules: agent.rules,
     extraRules: agent.extra_rules || '',
     persona: agent.persona || '',
+    personaMode: agent.persona_mode || 'single',
     promptMode: agent.prompt_mode || 'inline',
     rulesFile: agent.prompt_mode === 'file' ? prompts.RULES_FILE_PATH : null,
     manualTasks: Boolean(agent.manual_tasks),
@@ -291,11 +292,39 @@ function addUploads(agentId, files = [], { note = '', extraRules = '' } = {}) {
   return { files: saved, dir: `/workspace/uploads/${stamp}`, notice };
 }
 
+// 完整人格：按固定分节拼成 Markdown（空节跳过）；单人格：保持一段文本。
+const PERSONA_SECTIONS = [
+  ['world', '世界观'],
+  ['background', '身份与背景'],
+  ['traits', '性格特质'],
+  ['style', '说话风格'],
+  ['relation', '与用户的关系'],
+  ['taboos', '喜恶与禁忌'],
+  ['memory', '长期记忆与目标'],
+  ['others', '其他角色'],
+  ['look', '外形']
+];
+
+function composePersona(mode, singleText, sections) {
+  const single = String(singleText || '').trim().slice(0, 4000);
+  if (mode !== 'full') return { text: single, mode: 'single' };
+  const parts = [];
+  for (const [key, title] of PERSONA_SECTIONS) {
+    const value = String((sections && sections[key]) || '').trim().slice(0, 2000);
+    if (!value) continue;
+    parts.push(`## ${title}\n${value}`);
+  }
+  const text = parts.join('\n\n').slice(0, 8000);
+  return { text, mode: text ? 'full' : 'single' };
+}
+
 async function createAgent({
   goal,
   rules,
   extraRules = '',
   persona = '',
+  personaMode = 'single',
+  personaSections = null,
   providerId,
   model,
   initialBalance,
@@ -315,11 +344,13 @@ async function createAgent({
   const cleanGoal = String(goal || '').trim();
   const cleanRules = String(rules || '').trim();
   const cleanExtraRules = String(extraRules || '').trim();
-  const cleanPersona = String(persona || '').trim().slice(0, 4000);
+  const cleanPersona = composePersona(personaMode, persona, personaSections);
   const cleanUploadNote = String(uploadNote || '').trim();
   const cleanRunMode = runMode === 'companion' ? 'companion' : 'research';
-  if (!cleanGoal || !cleanRules) {
-    throw new Error(cleanRunMode === 'companion' ? '陪伴目标与平台规则不能为空' : '研究目标不能为空');
+  if (cleanRunMode === 'companion') {
+    if (!cleanRules) throw new Error('陪伴规则不能为空');
+  } else if (!cleanGoal || !cleanRules) {
+    throw new Error('研究目标不能为空');
   }
 
   const provider = getProvider(providerId);
@@ -405,9 +436,9 @@ async function createAgent({
     `INSERT INTO agents
       (id, seq, goal, rules, provider_id, model, model_type, initial_balance, balance, status, api_key,
        allow_internet, unlimited_tokens, enable_screen, vision_mode, vision_provider_id, vision_model,
-       vision_bill, extra_rules, manual_tasks, persona, prompt_mode, toolkits, mode,
+       vision_bill, extra_rules, manual_tasks, persona, persona_mode, prompt_mode, toolkits, mode,
        crash_max_retries, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       seq,
@@ -428,7 +459,8 @@ async function createAgent({
       visionBillFlag,
       cleanExtraRules,
       effectiveManual ? 1 : 0,
-      cleanPersona || null,
+      cleanPersona.text || null,
+      cleanPersona.mode,
       promptMode,
       JSON.stringify(toolkitSnapshot),
       cleanRunMode,
@@ -509,7 +541,7 @@ async function startAgent(agentId) {
     });
     containerId = created.containerId;
   } else if (!info.State?.Running) {
-    await docker.startContainer(containerId);
+    await docker.startContainer(containerId, agent);
   }
 
   try {
@@ -547,7 +579,7 @@ async function startAgent(agentId) {
   return getAgent(agentId);
 }
 
-async function restartAgent(agentId) {
+async function restartAgent(agentId, { rebuild = false } = {}) {
   const agent = getAgent(agentId);
   if (!agent) throw new Error('AI 不存在');
   if (agent.status === 'dead' || agent.status === 'finalizing') {
@@ -557,11 +589,12 @@ async function restartAgent(agentId) {
     throw new Error('AI 处于磁盘暂停，请先恢复');
   }
 
-  const clean = Number(agent.clean_on_restart || 0) === 1;
+  // 重建是本次请求的参数，不是持久设置：普通重启只 stop/start，保留容器内改动
+  const clean = Boolean(rebuild);
   addEvent(
     agentId,
     'restart',
-    clean ? '管理员重启：清理容器后重建（工作区保留）。' : '管理员重启：复用现有容器（保留容器内的改动）。'
+    clean ? '管理员重启：按本次请求重建容器（工作区保留）。' : '管理员重启：复用现有容器（保留容器内的改动）。'
   );
 
   // 先置为 created，避免 supervisor 把这次主动重启当作崩溃
@@ -582,26 +615,6 @@ async function restartAgent(agentId) {
   }
 
   return startAgent(agentId);
-}
-
-function setCleanOnRestart(agentId, enabled) {
-  const agent = getAgent(agentId);
-  if (!agent) throw new Error('AI 不存在');
-  const value = enabled ? 1 : 0;
-  if (Number(agent.clean_on_restart || 0) === value) return agent;
-  db.run('UPDATE agents SET clean_on_restart = ? WHERE id = ?', [value, agentId]);
-  addEvent(
-    agentId,
-    'setting',
-    value ? '已开启：重启/重建时清理容器（工作区保留）。' : '已关闭：重启/重建时保留容器内的改动。'
-  );
-  notifyAgent(
-    agentId,
-    value
-      ? '管理员修改了容器重启策略：重启时会删除并重建容器，容器内（工作区以外）安装的软件与改动会丢失。'
-      : '管理员修改了容器重启策略：重启时会复用现有容器，容器内安装的软件与改动会保留。'
-  );
-  return getAgent(agentId);
 }
 
 function setModels(agentId, { providerId, model, fallbackProviderId, fallbackModel }) {
@@ -653,7 +666,7 @@ async function resumeAgent(agentId) {
     try {
       await docker.unpauseContainer(agent.container_id);
     } catch {
-      await docker.startContainer(agent.container_id);
+      await docker.startContainer(agent.container_id, agent);
     }
   }
   db.run(
@@ -729,6 +742,27 @@ function resetCrashAttempts(agentId) {
   notifyAgent(agentId, `管理员已将你的崩溃计数从 ${before} 重置为 0。`);
   addEvent(agentId, 'crash_reset', `崩溃计数：${before} → 0。`);
   return getAgent(agentId);
+}
+
+function updatePersona(agentId, { persona, personaMode }) {
+  const agent = getAgent(agentId);
+  if (!agent) throw new Error('AI 不存在');
+  if (agent.status === 'dead' || agent.status === 'finalizing') {
+    throw new Error('该 AI 已死亡或正在归档，不能修改人格');
+  }
+  const text = String(persona || '').trim().slice(0, 20000);
+  const mode = personaMode === 'full' ? 'full' : 'single';
+  db.run('UPDATE agents SET persona = ?, persona_mode = ? WHERE id = ?', [
+    text || null,
+    mode,
+    agentId
+  ]);
+  const updated = getAgent(agentId);
+  // 系统提示在容器启动时读取，这里同步刷新工作区里的文件，重启容器后生效。
+  writeAgentConfig(updated);
+  notifyAgent(agentId, '管理员更新了你的人格设定，重启容器后按新人格工作。');
+  addEvent(agentId, 'persona_updated', `管理员更新人格（${mode === 'full' ? '完整人格' : '单人格'}，${text.length} 字），重启容器后生效。`);
+  return updated;
 }
 
 function addCorpus(agentId, files) {
@@ -875,12 +909,12 @@ module.exports = {
   createAgent,
   startAgent,
   restartAgent,
-  setCleanOnRestart,
   setModels,
   resumeAgent,
   recharge,
   effectiveCrashLimit,
   updateCrashLimit,
+  updatePersona,
   resetCrashAttempts,
   addCorpus,
   addUploads,

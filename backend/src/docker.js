@@ -1,5 +1,6 @@
 const Docker = require('dockerode');
 const fs = require('fs');
+const path = require('path');
 const config = require('./config');
 const db = require('./db');
 
@@ -221,9 +222,36 @@ function toDockerPath(value) {
   return String(value).replace(/\\/g, '/');
 }
 
+// 桥只在 config.qq.account 有值时才尝试快速登录；这里把桥记住的 uin 回填到
+// /data/config.json，容器重建/重启后就能自动登录，不必每次扫码。
+function ensureBridgeAccount(agent) {
+  if (!agent || agent.mode !== 'companion') return;
+  const dir = path.join(config.workspacesDir, agent.id, '.qq');
+  fs.mkdirSync(dir, { recursive: true });
+  const configPath = path.join(dir, 'config.json');
+  let bridgeConfig = {};
+  try {
+    bridgeConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } catch {
+    bridgeConfig = {};
+  }
+  let uin = String(bridgeConfig?.qq?.account || '').trim();
+  if (!uin) {
+    try {
+      uin = String(JSON.parse(fs.readFileSync(path.join(dir, 'account-state.json'), 'utf8')).uin || '').trim();
+    } catch {
+      uin = '';
+    }
+  }
+  if (!uin) return;
+  bridgeConfig.qq = { ...(bridgeConfig.qq || {}), account: uin };
+  fs.writeFileSync(configPath, JSON.stringify(bridgeConfig, null, 2), 'utf8');
+}
+
 async function createAgentContainer(agent, { hostWorkspace, hostRulesFile = null, toolkitBinds = [] }) {
   const api = client();
   const isCompanion = agent.mode === 'companion';
+  if (isCompanion) ensureBridgeAccount(agent);
   const internalNetwork = await ensureAgentNetwork(agent.seq);
   // 陪伴 AI 需要直连 QQ 服务器：无论是否勾选外网，都额外接入出网网络。
   const outboundNetwork = agent.allow_internet || isCompanion
@@ -345,8 +373,9 @@ async function createAgentContainer(agent, { hostWorkspace, hostRulesFile = null
   };
 }
 
-async function startContainer(containerId) {
+async function startContainer(containerId, agent = null) {
   if (!containerId) throw new Error('容器 ID 为空');
+  if (agent) ensureBridgeAccount(agent);
   const container = client().getContainer(containerId);
   const info = await container.inspect();
   if (info.State?.Running) return;

@@ -10,6 +10,10 @@
   </div>
 <% } %>
 
+<% if (restartNotice) { %>
+  <div class="notice ok"><%= restartNotice %></div>
+<% } %>
+
 <% if (agent.mode === 'companion') { %>
   <div class="notice">
     这是陪伴模式 AI：通过 QQ 与人对话，不领取平台任务、不提交、不参与 Judge。
@@ -30,7 +34,9 @@
 <div class="panel">
   <div class="kv">
     <div class="k">运行模式</div><div><%= agent.mode === 'companion' ? '陪伴模式' : '研究模式' %></div>
-    <div class="k"><%= agent.mode === 'companion' ? '陪伴目标' : '研究目标' %></div><div><%= agent.goal %></div>
+    <% if (agent.goal) { %>
+      <div class="k"><%= agent.mode === 'companion' ? '陪伴目标' : '研究目标' %></div><div><%= agent.goal %></div>
+    <% } %>
     <% if (agent.persona) { %>
       <div class="k">人格</div><div><details><summary>查看</summary><pre><%= agent.persona %></pre></details></div>
     <% } %>
@@ -67,7 +73,10 @@
       <form class="shrink" method="post" action="/agents/<%= agent.id %>/start"><button class="light">启动容器</button></form>
     <% } %>
     <% if (agent.status !== 'dead' && agent.status !== 'finalizing') { %>
-      <form class="shrink" method="post" action="/agents/<%= agent.id %>/restart"><button class="light">重启容器</button></form>
+      <form class="shrink" method="post" action="/agents/<%= agent.id %>/restart" style="display:flex;align-items:center;gap:8px">
+        <button class="light">重启容器</button>
+        <label class="check" title="勾选后删除容器并重建，容器内改动会丢失，工作区保留"><input type="checkbox" name="rebuild" value="1">重建</label>
+      </form>
     <% } %>
     <% if (agent.status === 'paused_disk') { %>
       <form class="shrink" method="post" action="/agents/<%= agent.id %>/resume"><button class="light">从磁盘暂停恢复</button></form>
@@ -116,21 +125,28 @@
   <% } %>
   <p class="muted small">崩溃重启上限只能增加或改为无限，不能减少。修改上限、重置计数和充值都会通过平台通知告知 AI。</p>
 
-  <% var cleanOnRestart = Number(agent.clean_on_restart || 0) === 1; %>
-  <form method="post" action="/agents/<%= agent.id %>/clean-on-restart" style="margin-top:14px;border-top:1px solid var(--line,#333);padding-top:12px">
+  <p class="muted small">「重启容器」默认只停止再启动现有容器，容器里安装的软件、登录会话都会保留；勾选「重建」才会删除容器并重新创建，工作区（/workspace）不受影响。重建按本次请求生效，不会保存为长期设置。</p>
+
+  <% if (personaNotice) { %>
+    <div class="notice ok"><%= personaNotice %></div>
+  <% } %>
+  <% if (personaError) { %>
+    <div class="notice error">人格保存失败：<%= personaError %></div>
+  <% } %>
+  <form method="post" action="/agents/<%= agent.id %>/persona" style="margin-top:14px;border-top:1px solid var(--line,#333);padding-top:12px">
     <div class="kv">
-      <div class="k">重启/重建策略</div>
-      <div><%= cleanOnRestart ? '清理容器后重建（容器内改动会丢失）' : '复用现有容器（保留容器内改动）' %></div>
+      <div class="k">人格</div>
+      <div class="checks">
+        <label class="check"><input type="radio" name="persona_mode" value="single" <%= agent.persona_mode === 'full' ? '' : 'checked' %>> 单人格（一段文字）</label>
+        <label class="check"><input type="radio" name="persona_mode" value="full" <%= agent.persona_mode === 'full' ? 'checked' : '' %>> 完整人格（Markdown 分节）</label>
+      </div>
     </div>
-    <div class="checks" style="margin-top:8px">
-      <label class="check">
-        <input type="checkbox" name="enabled" value="1" <%= cleanOnRestart ? 'checked' : '' %>>
-        重启或重建时清理容器（工作区始终保留）
-      </label>
-    </div>
-    <div class="shrink" style="margin-top:8px"><button class="light" type="submit">保存策略</button></div>
+    <textarea name="persona" rows="14" style="width:100%;margin-top:8px" placeholder="完整人格可用 ## 世界观 / ## 身份与背景 / ## 性格特质 / ## 说话风格 / ## 与用户的关系 / ## 喜恶与禁忌 / ## 长期记忆与目标 / ## 其他角色 / ## 外形 分节"><%= agent.persona || '' %></textarea>
+    <p class="muted small">
+      人格只影响 AI 的语气、性格与自我设定，不能覆盖平台规则。保存后系统提示文件会立即同步，但容器里运行的进程只在启动时读取，需要点上方「重启容器」后生效；陪伴 AI 重启会连同 QQ 一起重启。
+    </p>
+    <div class="shrink"><button type="submit" <%= agent.status === 'dead' || agent.status === 'finalizing' ? 'disabled' : '' %>>保存人格</button></div>
   </form>
-  <p class="muted small">关闭（默认）时，「重启容器」只停止再启动现有容器，容器里安装的软件、登录会话等都会保留；开启后会删除容器并重新创建，工作区（/workspace）不受影响。</p>
 
   <% if (modelError) { %>
     <div class="notice error"><%= modelError %></div>
@@ -208,7 +224,7 @@
     <div class="notice">容器尚未启动，虚拟屏不可用。请先启动容器。</div>
   <% } else { %>
     <div class="panel">
-      <p class="muted small">noVNC 仅监听 127.0.0.1，可直接在下方操作，也可以在新窗口打开。</p>
+      <p class="muted small">虚拟桌面通过面板转发（/screen/<%= agent.id %>/），远程访问也能打开，可直接在下方操作，也可以在新窗口打开。</p>
       <iframe class="novnc-frame" src="<%= noVncUrl %>" title="noVNC"></iframe>
       <p><a href="<%= noVncUrl %>" target="_blank" rel="noopener">在新窗口打开 noVNC</a></p>
     </div>

@@ -22,16 +22,7 @@
     <p>还没有 AI。先到 <a href="/providers">供应商</a> 配置 DeepSeek API Key，再到 <a href="/agents/new">创建 AI</a>。</p>
   </div>
 <% } else { %>
-  <% var researchAgents = agents.filter(function (a) { return a.mode !== 'companion'; }); %>
-  <% var companionAgents = agents.filter(function (a) { return a.mode === 'companion'; }); %>
-  <h2>研究模式 AI（<%= researchAgents.length %>）</h2>
-  <%- include('partials/agents_table', { rows: researchAgents }) %>
-  <h2>陪伴模式 AI（<%= companionAgents.length %>）</h2>
-  <% if (!companionAgents.length) { %>
-    <div class="panel muted">还没有陪伴 AI。可在 <a href="/agents/new?mode=companion">创建陪伴 AI</a> 中添加。</div>
-  <% } else { %>
-    <%- include('partials/agents_table', { rows: companionAgents }) %>
-  <% } %>
+  <%- include('partials/agents_table', { rows: agents }) %>
 <% } %>
 
 <h2>最近事件</h2>

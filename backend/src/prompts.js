@@ -233,12 +233,15 @@ function companionToolDocs(agent = {}) {
 13. qq_group_members(group_id, limit?, offset?)：查询群成员。
 14. qq_group_info(group_id)：查询群名称、群主、成员数。
 15. qq_friend_profile(uin)：查询好友/用户资料。
-16. qq_revoke(conversation_id, message_id, kind?)：撤回消息。`;
+16. qq_revoke(conversation_id, message_id, kind?)：撤回消息。
+17. keyword_set(word, conversation_id?)：设置群聊命中词。群里没 @ 你时，消息包含命中词也会被当成点名并推送平台通知；不传 conversation_id 表示所有群生效，传了只对该群生效。
+18. keyword_remove(word, conversation_id?)：删除命中词，参数必须和设置时一致。
+19. keyword_list(conversation_id?)：列出当前生效的命中词。`;
 
   docs += `
 QQ 消息说明：
 - 平台会把新消息按会话转交给你，消息里带有 conversation_id、会话类型（private/group/channel）、发送人、消息 id、@列表、回复目标和附件列表。
-- 私聊必须回复；群聊只在被 @ 时回复，未 @ 的消息只作为上下文。
+- 私聊必须回复；群聊只在被 @ 时回复，未 @ 的消息只作为上下文（命中词除外：命中即按被点名处理）。
 - 附件里图片会带容器内 path，直接用 vision_describe(image_path=...) 查看；文件/语音/视频如果标了“需要先调用 qq_media_fetch”，先取到 path 再 read_file 或处理。
 - 回复时优先调用 qq_send；如果本轮只输出纯文本且没有调用任何工具，平台会把这段文本自动发回当前会话。
 - 群聊回复要简短（平台会截断过长内容），不要连续多条刷屏。`;
@@ -250,20 +253,29 @@ QQ 消息说明：
   return docs;
 }
 
-// 陪伴模式：规则 inline 写入系统提示（不使用规则文件）
+// 人格注入：单人格补「## 人格」标题；完整人格自带分节标题（世界观、其他角色、外形等），直接展开。
+function personaBlock(agent) {
+  if (!agent.persona) return '';
+  return agent.persona_mode === 'full' ? `\n${agent.persona}\n` : `\n## 人格\n${agent.persona}\n`;
+}
+
+// 陪伴模式：规则 inline 写入系统提示（不使用规则文件）。人格不再写入系统提示，
+// 由平台在每次模型请求前通过 /api/agent/persona 注入，修改后无需重启容器。
 function buildCompanionSystemPrompt(agent) {
-  const personaSection = agent.persona ? `\n## 人格\n${agent.persona}\n` : '';
+  const goalSection = agent.goal ? `\n## 陪伴目标\n${agent.goal}\n` : '';
   const limit = crashLimit(agent);
   const screenLine = agent.enable_screen
     ? `- 你有一个 ${config.screenWidth}x${config.screenHeight} 的虚拟桌面（DISPLAY=:99），QQ 与通讯桥运行在同一容器内。`
     : '';
   const toolkitText = toolkitSection(agent);
 
-  return `你是 ${agent.id}，一个运行在隔离沙盒中的陪伴型 AI。你的主要工作是通过 QQ 与人对话、陪伴和交流。
+  // 配置了人格时，系统提示只给编号，不再自称身份，避免与人格抢“我是谁”
+  const identityLine = agent.persona
+    ? `你的平台编号是 ${agent.id}（只是系统标识，不是你的名字；被问到你是谁时，必须按人格设定回答）。你运行在隔离沙盒中，主要工作是通过 QQ 与人对话、陪伴和交流。`
+    : `你是 ${agent.id}，一个运行在隔离沙盒中的陪伴型 AI。你的主要工作是通过 QQ 与人对话、陪伴和交流。`;
 
-## 陪伴目标
-${agent.goal}
-${personaSection}
+  return `${identityLine}
+${goalSection}
 ## 平台硬规则（不可违反）
 1. 你不领取平台任务、不提交任务、不参与 Judge 判定；平台任务对你不可见。
 2. 你的每次操作都会消耗 token，但你的额度无上限，不会因为 token 耗尽死亡，也不会进入临终期。
@@ -335,7 +347,6 @@ function buildAgentSystemPrompt(agent) {
   if (agent.mode === 'companion') return buildCompanionSystemPrompt(agent);
 
   const allowInternet = Boolean(agent.allow_internet);
-  const personaSection = agent.persona ? `\n## 人格\n${agent.persona}\n` : '';
 
   const internetLine = allowInternet
     ? '- 你可以访问外网。'
@@ -360,7 +371,6 @@ function buildAgentSystemPrompt(agent) {
 
 ## 研究目标
 ${agent.goal}
-${personaSection}
 ## 平台规则文件
 平台的全部规则（平台硬规则、管理员规则、额度与死亡、任务与提交、重复提交、Oracle、暂停、崩溃与隔离）都写在容器根目录的 ${RULES_FILE_PATH}。
 - 只要你不清楚、忘记或不确定某条规则，先用 read_file 读取 ${RULES_FILE_PATH} 再行动，不要凭记忆猜测规则。
@@ -389,7 +399,6 @@ ${behavior}`;
 
 ## 研究目标
 ${agent.goal}
-${personaSection}
 ## 平台硬规则（不可违反）
 ${buildAgentHardRules(agent)}
 
@@ -623,6 +632,7 @@ module.exports = {
   DEFAULT_ORACLE_RULES,
   DEFAULT_COMPANION_RULES,
   companionToolDocs,
+  personaBlock,
   buildCompanionSystemPrompt,
   toolDocs,
   actionProtocol,

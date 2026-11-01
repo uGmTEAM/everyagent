@@ -359,6 +359,18 @@ CREATE TABLE IF NOT EXISTS manager_accounts (
   updated_at TEXT NOT NULL,
   UNIQUE(kind, account_id)
 );
+
+-- 群聊命中词：scope=global 对所有群生效，scope=group 只对指定群生效
+CREATE TABLE IF NOT EXISTS agent_keywords (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'global',
+  conversation_id TEXT NOT NULL DEFAULT '',
+  word TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(agent_id, scope, conversation_id, word)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_keywords_agent ON agent_keywords(agent_id, scope);
 `;
 
 function ensureColumn(table, column, definition) {
@@ -392,6 +404,7 @@ function init() {
   ensureColumn('agents', 'extra_rules', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('agents', 'manual_tasks', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('agents', 'persona', 'TEXT');
+  ensureColumn('agents', 'persona_mode', "TEXT NOT NULL DEFAULT 'single'");
   // inline：规则直接写进系统提示（历史 AI 保持原行为）；file：规则写入容器根目录 /PLATFORM_RULES.md
   ensureColumn('agents', 'prompt_mode', "TEXT NOT NULL DEFAULT 'inline'");
   ensureColumn('agents', 'toolkits', 'TEXT');
@@ -412,6 +425,7 @@ function init() {
   ensureColumn('agents', 'crash_max_retries', 'INTEGER');
   ensureColumn('agents', 'crash_unlimited', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('agents', 'clean_on_restart', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('companion_messages', 'trigger_word', 'TEXT');
   ensureColumn('agents', 'fallback_provider_id', 'INTEGER');
   ensureColumn('agents', 'fallback_model', 'TEXT');
   ensureColumn('agents', 'wake_requested', 'INTEGER NOT NULL DEFAULT 0');

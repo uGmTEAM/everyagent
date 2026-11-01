@@ -610,6 +610,51 @@ const COMPANION_TOOL_DEFINITIONS = [
         required: ['account_id']
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'keyword_set',
+      description:
+        '设置群聊命中词。群里没 @ 你时，只要消息包含命中词就会按被点名处理并推送平台通知。' +
+        '不传 conversation_id 表示对所有群生效；传了则只对该群生效。',
+      parameters: {
+        type: 'object',
+        properties: {
+          word: { type: 'string', description: '关键词，1-64 个字符，不区分大小写，包含即命中' },
+          conversation_id: { type: 'string', description: '可选，群号；不传表示全局' }
+        },
+        required: ['word']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'keyword_remove',
+      description: '删除群聊命中词。参数与 keyword_set 一致，删除时必须与设置时的 word 和 conversation_id 完全一致。',
+      parameters: {
+        type: 'object',
+        properties: {
+          word: { type: 'string', description: '要删除的关键词' },
+          conversation_id: { type: 'string', description: '可选，群号；不传表示全局' }
+        },
+        required: ['word']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'keyword_list',
+      description: '列出当前生效的群聊命中词（全局 + 指定群）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          conversation_id: { type: 'string', description: '可选，群号；传了会额外列出该群专属词' }
+        }
+      }
+    }
   }
 ];
 
@@ -1123,6 +1168,27 @@ async function executeTool({ tool, args = {}, config, state, saveState }) {
         kind: safeArgs.kind === 'group' ? 'group' : 'private'
       });
     }
+
+    case 'keyword_set': {
+      const word = String(safeArgs.word || '').trim();
+      if (!word) throw new Error('word 不能为空');
+      return api.companionKeywordSet({
+        word,
+        conversation_id: safeArgs.conversation_id ? String(safeArgs.conversation_id) : undefined
+      });
+    }
+
+    case 'keyword_remove': {
+      const word = String(safeArgs.word || '').trim();
+      if (!word) throw new Error('word 不能为空');
+      return api.companionKeywordRemove({
+        word,
+        conversation_id: safeArgs.conversation_id ? String(safeArgs.conversation_id) : undefined
+      });
+    }
+
+    case 'keyword_list':
+      return api.companionKeywords(safeArgs.conversation_id ? String(safeArgs.conversation_id) : '');
 
     case 'reminder_create': {
       const message = String(safeArgs.message || '').trim();

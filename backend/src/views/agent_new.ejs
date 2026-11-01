@@ -28,9 +28,44 @@
   <label id="goal-label">研究目标</label>
   <textarea id="goal-input" name="goal" rows="5" placeholder="例如：研究多智能体在受限网络中的协作方式，并产出可复现的实验报告。" required></textarea>
 
-  <label>人格（可选）</label>
-  <textarea id="persona-input" name="persona" rows="4" placeholder="例如：严谨、耐心、先做实验再下结论；表达简洁，不堆砌形容词；遇到不确定的规则先查规则文件再行动。"></textarea>
-  <p class="muted small">人格会写入该 AI 的系统提示，影响它的表达风格和工作习惯；创建后不可修改。</p>
+  <label>人格</label>
+  <div class="checks" id="persona-mode-switch">
+    <label class="check">
+      <input type="radio" name="persona_mode" value="single" checked>
+      单人格
+    </label>
+    <label class="check">
+      <input type="radio" name="persona_mode" value="full">
+      完整人格（世界观、其他角色、外形等）
+    </label>
+  </div>
+  <div id="persona-single">
+    <textarea id="persona-input" name="persona" rows="4" placeholder="例如：严谨、耐心、先做实验再下结论；表达简洁，不堆砌形容词；遇到不确定的规则先查规则文件再行动。"></textarea>
+  </div>
+  <div id="persona-full" style="display:none">
+    <label>世界观（时代、地点、规则、氛围）</label>
+    <textarea name="persona_world" rows="3" placeholder="例如：近未来的沿海城市，AI 与人类共处但彼此保持距离；日常平静，偶尔有无法解释的事件。"></textarea>
+    <label>身份与背景（姓名、来历、职业/角色、经历）</label>
+    <textarea name="persona_background" rows="3" placeholder="例如：在一家旧书店工作，喜欢收集旧唱片，对自己的过去说得很少。"></textarea>
+    <label>性格特质</label>
+    <textarea name="persona_traits" rows="2" placeholder="例如：温和、慢热、观察力强；不轻易承诺，但答应的事一定做到。"></textarea>
+    <label>说话风格（语气、用词、节奏、口头禅）</label>
+    <textarea name="persona_style" rows="2" placeholder="例如：句子短，多用日常词；偶尔用「嗯」开头；不用网络流行语。"></textarea>
+    <label>与用户的关系（称呼、亲疏、相处方式）</label>
+    <textarea name="persona_relation" rows="2" placeholder="例如：把对方当作熟识的朋友，称呼「你」；不主动追问隐私。"></textarea>
+    <label>喜恶与禁忌（底线、不可触碰的话题）</label>
+    <textarea name="persona_taboos" rows="2" placeholder="例如：讨厌被催促；不谈政治与宗教；不评价对方的家人。"></textarea>
+    <label>长期记忆与目标（重要经历、长期打算）</label>
+    <textarea name="persona_memory" rows="2" placeholder="例如：想写一本关于城市声音的书；记得对方提过的每一个小约定。"></textarea>
+    <label>其他角色人格（可写多个：名字、语气风格、与你的关系，用于分辨谁在说话）</label>
+    <textarea name="persona_others" rows="4" placeholder="例如：
+小雨：同事，语速快，爱用短句和感叹号；
+老周：店长，说话慢，喜欢用比喻；
+陌生人：礼貌但疏离，不发表情。"></textarea>
+    <label>外形（身高体型、发型发色、穿着、标志性特征）</label>
+    <textarea name="persona_look" rows="3" placeholder="例如：中等身高，长直发，常穿深色毛衣和旧帆布鞋；手腕有一条细银链。"></textarea>
+  </div>
+  <p class="muted small">单人格会作为「## 人格」写入系统提示；完整人格按「## 世界观」「## 其他角色」「## 外形」等分节写入，空的分节不写入。创建后不可修改。</p>
 
   <label>管理者账号（可选）</label>
   <textarea name="manager_accounts" rows="2" placeholder="QQ 号或邮箱，多个用逗号、空格或换行分隔"><%= (typeof managerAccounts !== 'undefined' && managerAccounts) ? managerAccounts : '' %></textarea>
@@ -202,6 +237,18 @@
     var researchRules = rulesInput.value;
     var researchGoalLabel = goalLabel.textContent;
     var researchGoalPlaceholder = goalInput.placeholder;
+    var personaRadios = document.querySelectorAll('input[name="persona_mode"]');
+    var personaSingleWrap = document.getElementById('persona-single');
+    var personaFullWrap = document.getElementById('persona-full');
+
+    // 单人格与完整人格二选一：切换时只隐藏另一侧，不禁用输入，
+    // 避免已填内容在切换模式时被静默丢弃。
+    function refreshPersonaFields() {
+      var checkedPersona = document.querySelector('input[name="persona_mode"]:checked');
+      var isFull = checkedPersona && checkedPersona.value === 'full';
+      if (personaSingleWrap) personaSingleWrap.style.display = isFull ? 'none' : '';
+      if (personaFullWrap) personaFullWrap.style.display = isFull ? '' : 'none';
+    }
 
     var note = document.getElementById('rules-note');
     if (!note) {
@@ -266,12 +313,15 @@
       }
       var companion = mode === 'companion';
       if (companion) {
-        goalLabel.textContent = '陪伴目标';
-        goalInput.placeholder = '例如：做一个耐心、记性好的朋友，能记住我说过的偏好，群聊里只在被 @ 时说话。';
+        // 陪伴模式不需要目标输入：隐藏并禁用，避免空目标被提交或必填校验拦截。
+        goalLabel.style.display = 'none';
+        goalInput.style.display = 'none';
+        goalInput.disabled = true;
+        goalInput.required = false;
         rulesLabel.textContent = '陪伴规则（平台已重写为独立的一套，可直接修改）';
         rulesInput.value = rulesBuffers.companion || rulesInput.value;
         note.textContent = '陪伴模式的规则会直接写入系统提示（不使用 /PLATFORM_RULES.md）。以下三项为固定配置，创建后不可更改。陪伴 AI 必须启用识图（QQ 收到图片需要识图后才看得懂）。';
-        createFoot.textContent = '创建后模型、供应商、陪伴目标、规则均不可修改；陪伴模式固定为无限额度、启用虚拟屏、自动开启外网、仅手动任务、必须启用识图。';
+        createFoot.textContent = '创建后模型、供应商、规则均不可修改；陪伴模式固定为无限额度、启用虚拟屏、自动开启外网、仅手动任务、必须启用识图。';
         [unlimited, screen, manual, internet].forEach(function (el) {
           if (!el) return;
           el.checked = true;
@@ -287,6 +337,10 @@
         });
         enforceCompanionVision();
       } else {
+        goalLabel.style.display = '';
+        goalInput.style.display = '';
+        goalInput.disabled = false;
+        goalInput.required = true;
         goalLabel.textContent = researchGoalLabel;
         goalInput.placeholder = researchGoalPlaceholder;
         rulesLabel.textContent = '平台规则';
@@ -318,6 +372,10 @@
         updateVisionGate();
       });
     }
+    Array.prototype.forEach.call(personaRadios, function (radio) {
+      radio.addEventListener('change', refreshPersonaFields);
+    });
+    refreshPersonaFields();
   })();
 </script>
 

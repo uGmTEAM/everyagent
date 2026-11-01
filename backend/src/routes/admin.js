@@ -262,9 +262,68 @@ router.get('/companion/:id', asyncHandler(async (req, res) => {
     binding,
     stats,
     crashLimit: agents.effectiveCrashLimit(agent),
-    noVncUrl: `http://127.0.0.1:${config.noVncBasePort + agent.seq}/vnc.html?autoconnect=1&resize=scale`,
+    noVncUrl: `/screen/${encodeURIComponent(agent.id)}/vnc.html?autoconnect=1&resize=scale`,
     message: req.query.message ? String(req.query.message) : null,
     error: req.query.error ? String(req.query.error) : null
+  });
+}));
+
+router.get('/companion/:id/live', asyncHandler(async (req, res) => {
+  const agent = agents.getAgentWithProvider(req.params.id);
+  if (!agent || agent.mode !== 'companion') {
+    return res.status(404).json({ error: { message: '陪伴 AI 不存在' } });
+  }
+  const conversations = companion.recentConversations(agent.id, 40);
+  const activeConversation = String(req.query.conversation || (conversations[0]?.conversation_id || ''));
+  const messages = activeConversation
+    ? companion.conversationMessages(agent.id, activeConversation, 300)
+    : [];
+  const binding = companion.bindingOf(agent.id) || {};
+  const stats = companion.stats(agent.id);
+  const keywords = companion.listKeywords(agent.id, activeConversation || null);
+  res.json({
+    status: agent.status,
+    status_text: res.locals.statusText(agent.status),
+    status_class: res.locals.statusClass(agent.status),
+    model: agent.model,
+    binding: {
+      logged_in: Boolean(binding.logged_in),
+      uin: binding.uin || '',
+      bridge_ready: Boolean(binding.bridge_ready),
+      qq_restarts: Number(binding.qq_restarts || 0),
+      last_error: binding.last_error || ''
+    },
+    stats: {
+      conversations: Number(stats.conversations || 0),
+      incoming: Number(stats.incoming || 0),
+      outgoing: Number(stats.outgoing || 0)
+    },
+    conversations: conversations.map((item) => ({
+      id: item.conversation_id,
+      name: item.conversation_name || '',
+      kind: item.conversation_kind,
+      count: Number(item.message_count || 0),
+      last_text: formatDate(item.last_at)
+    })),
+    active_conversation: activeConversation,
+    keywords: keywords.map((item) => ({
+      word: item.word,
+      scope: item.scope,
+      conversation_id: item.conversation_id
+    })),
+    messages: messages.map((message) => ({
+      id: Number(message.id),
+      direction: message.direction,
+      who:
+        message.direction === 'in'
+          ? message.sender_name || message.sender_uin || '对方'
+          : `${agent.id} · AI`,
+      content: message.content,
+      time: formatDate(message.created_at),
+      needs_reply: Number(message.needs_reply || 0),
+      trigger_word: message.trigger_word || '',
+      reminder: message.conversation_id === '__reminder__'
+    }))
   });
 }));
 
@@ -310,22 +369,20 @@ router.get('/companion/:id/qrcode', asyncHandler(async (req, res) => {
 router.post('/companion/:id/qq-restart', asyncHandler(async (req, res) => {
   const agent = agents.getAgent(req.params.id);
   if (!agent || agent.mode !== 'companion') return res.redirect('/companion');
-  try {
-    const exec = await docker.client().getContainer(agent.container_id).exec({
-      Cmd: ['sh', '-c', 'pkill -f /opt/QQ/qq || pkill -f QQ || true'],
-      AttachStdout: false,
-      AttachStderr: false
-    });
-    await exec.start({ Detach: true });
-    db.run('UPDATE qq_bindings SET qq_restarts = qq_restarts + 1, updated_at = ? WHERE agent_id = ?', [nowIso(), agent.id]);
-    events.addEvent(agent.id, 'qq_restart_manual', '管理员手动重启 QQ。');
-    res.redirect(`/companion/${agent.id}?message=${encodeURIComponent('已请求重启 QQ')}`);
-  } catch (error) {
-    res.redirect(`/companion/${agent.id}?error=${encodeURIComponent(`重启 QQ 失败：${error.message}`)}`);
-  }
+  db.run('UPDATE qq_bindings SET qq_restarts = qq_restarts + 1, updated_at = ? WHERE agent_id = ?', [nowIso(), agent.id]);
+  events.addEvent(agent.id, 'qq_restart_manual', '管理员手动重启 QQ（已提交请求，后台执行）。');
+  // Docker 引擎卡住时 exec 会长时间无响应；先回执再后台执行，避免按钮转圈。
+  docker.client()
+    .getContainer(agent.container_id)
+    .exec({ Cmd: ['sh', '-c', 'pkill -f /opt/QQ/qq || pkill -f QQ || true'], AttachStdout: false, AttachStderr: false })
+    .then((exec) => exec.start({ Detach: true }))
+    .catch((error) => events.addEvent(agent.id, 'qq_restart_error', `后台重启 QQ 失败：${error.message}`));
+  res.redirect(`/companion/${agent.id}?message=${encodeURIComponent('已提交重启 QQ 请求，正在后台执行')}`);
 }));
 
 router.get('/', asyncHandler(async (req, res) => {
+  // 总览只属于研究模式；陪伴模式统一走 /companion，避免两种 AI 混在同一页。
+  if (res.locals.panelMode === 'companion') return res.redirect('/companion');
   const list = agents.listAgents('research');
   const dockerOk = await docker.isAvailable();
   const totals = db.get(
@@ -412,6 +469,18 @@ router.post('/agents', upload.array('corpus', 50), asyncHandler(async (req, res)
       rules: req.body.rules,
       extraRules: req.body.extra_rules,
       persona: req.body.persona,
+      personaMode: req.body.persona_mode === 'full' ? 'full' : 'single',
+      personaSections: {
+        world: req.body.persona_world,
+        background: req.body.persona_background,
+        traits: req.body.persona_traits,
+        style: req.body.persona_style,
+        relation: req.body.persona_relation,
+        taboos: req.body.persona_taboos,
+        memory: req.body.persona_memory,
+        others: req.body.persona_others,
+        look: req.body.persona_look
+      },
       providerId: Number(req.body.provider_id),
       model: req.body.model,
       initialBalance: Number(req.body.initial_balance || config.defaultInitialBalance),
@@ -524,7 +593,7 @@ router.get('/agents/:id', asyncHandler(async (req, res) => {
   }
 
   const noVncUrl = agent.enable_screen
-    ? `http://127.0.0.1:${config.noVncBasePort + agent.seq}/vnc.html?autoconnect=1&resize=scale`
+    ? `/screen/${encodeURIComponent(agent.id)}/vnc.html?autoconnect=1&resize=scale`
     : null;
 
   const providerList = db.all('SELECT * FROM providers ORDER BY id ASC');
@@ -578,9 +647,25 @@ router.get('/agents/:id', asyncHandler(async (req, res) => {
     messageCompensation: config.adminMessageCompensation,
     providerList,
     fallbackProviderName: fallbackProvider?.name || null,
-    modelError: req.query.model_error ? String(req.query.model_error) : null
+    modelError: req.query.model_error ? String(req.query.model_error) : null,
+    personaNotice: req.query.persona_notice ? String(req.query.persona_notice) : null,
+    personaError: req.query.persona_error ? String(req.query.persona_error) : null,
+    restartNotice: req.query.restart_notice ? String(req.query.restart_notice) : null
   });
 }));
+
+router.post('/agents/:id/persona', (req, res) => {
+  const id = req.params.id;
+  try {
+    agents.updatePersona(id, {
+      persona: req.body.persona,
+      personaMode: req.body.persona_mode
+    });
+    res.redirect(`/agents/${id}?tab=settings&persona_notice=${encodeURIComponent('人格已保存，重启容器后生效')}`);
+  } catch (error) {
+    res.redirect(`/agents/${id}?tab=settings&persona_error=${encodeURIComponent(error.message)}`);
+  }
+});
 
 router.post('/agents/:id/message', asyncHandler(async (req, res) => {
   const agent = agents.getAgent(req.params.id);
@@ -659,18 +744,19 @@ router.post('/agents/:id/models', asyncHandler(async (req, res) => {
 }));
 
 router.post('/agents/:id/restart', asyncHandler(async (req, res) => {
-  try {
-    await agents.restartAgent(req.params.id);
-  } catch (error) {
-    events.addEvent(req.params.id, 'restart_error', `重启失败：${error.message}`);
-  }
-  res.redirect(`/agents/${req.params.id}`);
+  const id = req.params.id;
+  const rebuild = req.body.rebuild === '1' || req.query.rebuild === '1';
+  events.addEvent(id, 'restart_request', rebuild ? '管理员提交重建容器请求（后台执行）。' : '管理员提交重启容器请求（后台执行）。');
+  // 不阻塞页面：Docker 引擎响应慢时先回执，后台继续执行。
+  Promise.resolve()
+    .then(() => agents.restartAgent(id, { rebuild }))
+    .catch((error) => events.addEvent(id, 'restart_error', `重启失败：${error.message}`));
+  res.redirect(
+    `/agents/${id}?restart_notice=${encodeURIComponent(
+      rebuild ? '已提交重建容器请求（工作区保留），正在后台执行，稍后刷新查看状态' : '已提交重启容器请求，正在后台执行，稍后刷新查看状态'
+    )}`
+  );
 }));
-
-router.post('/agents/:id/clean-on-restart', (req, res) => {
-  agents.setCleanOnRestart(req.params.id, req.body.enabled === '1');
-  res.redirect(`/agents/${req.params.id}`);
-});
 
 router.post('/agents/:id/resume', asyncHandler(async (req, res) => {
   try {

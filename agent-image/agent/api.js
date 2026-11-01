@@ -136,6 +136,11 @@ async function memoryStats() {
   });
 }
 
+// 每次模型请求前拉取最新人格，避免把人格烧进系统提示文件后还要重启容器
+async function personaInfo() {
+  return apiFetch('/api/agent/persona', { timeoutMs: 15000 });
+}
+
 // 陪伴模式：从平台拉取待回复的 QQ 消息（拉取即标记已送达）
 async function companionInbox(limit = 8) {
   return apiFetch(`/api/agent/companion/inbox?limit=${Number(limit) || 8}`, { timeoutMs: 30000 });
@@ -230,13 +235,26 @@ async function companionCancelReminder(id) {
 async function companionManagers() {
   return apiFetch('/api/agent/companion/managers', { timeoutMs: 30000 });
 }
-
 async function companionRegisterManager(payload) {
   return apiFetch('/api/agent/companion/managers', {
     method: 'POST',
     body: payload,
     timeoutMs: 30000
   });
+}
+
+// 群聊命中词：传 conversation_id 表示只对该群生效，不传表示对所有群生效
+async function companionKeywords(conversationId = '') {
+  const query = conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : '';
+  return apiFetch(`/api/agent/keywords${query}`, { timeoutMs: 30000 });
+}
+
+async function companionKeywordSet(payload) {
+  return apiFetch('/api/agent/keywords', { method: 'POST', body: payload, timeoutMs: 30000 });
+}
+
+async function companionKeywordRemove(payload) {
+  return apiFetch('/api/agent/keywords/remove', { method: 'POST', body: payload, timeoutMs: 30000 });
 }
 
 module.exports = {
@@ -257,6 +275,7 @@ module.exports = {
   memoryForget,
   memoryStats,
   companionInbox,
+  personaInfo,
   companionSend,
   companionConversations,
   companionHistory,
@@ -270,5 +289,8 @@ module.exports = {
   companionCreateReminder,
   companionCancelReminder,
   companionManagers,
-  companionRegisterManager
+  companionRegisterManager,
+  companionKeywords,
+  companionKeywordSet,
+  companionKeywordRemove
 };

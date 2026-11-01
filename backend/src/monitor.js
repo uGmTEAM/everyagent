@@ -35,6 +35,52 @@ function diskFreeStats() {
   }
 }
 
+// WSL/QQ 崩溃时会在宿主写出 GB 级 .dmp（默认目录已用目录联接指向 G 盘，
+// 不占 C 盘）。这里每分钟清理一次：超过 60 秒的转储直接删，总量超过
+// 128MB 时从最旧的开始删，相当于崩溃转储不留存。
+function cleanupCrashDumps() {
+  const dir = path.join(process.env.LOCALAPPDATA || '', 'Temp', 'wsl-crashes');
+  if (!process.env.LOCALAPPDATA || !fs.existsSync(dir)) return 0;
+  let removed = 0;
+  const maxAgeMs = 60 * 1000;
+  const maxTotalBytes = 128 * 1024 * 1024;
+  try {
+    const files = fs
+      .readdirSync(dir)
+      .filter((name) => name.endsWith('.dmp'))
+      .map((name) => {
+        const fullPath = path.join(dir, name);
+        return { fullPath, stat: fs.statSync(fullPath) };
+      });
+    const now = Date.now();
+    for (const file of files) {
+      if (now - file.stat.mtimeMs > maxAgeMs) {
+        fs.unlinkSync(file.fullPath);
+        file.stat.removed = true;
+        removed += file.stat.size;
+      }
+    }
+    let total = files
+      .filter((file) => !file.stat.removed)
+      .reduce((sum, file) => sum + file.stat.size, 0);
+    const oldFirst = files
+      .filter((file) => !file.stat.removed)
+      .sort((a, b) => a.stat.mtimeMs - b.stat.mtimeMs);
+    for (const file of oldFirst) {
+      if (total <= maxTotalBytes) break;
+      fs.unlinkSync(file.fullPath);
+      total -= file.stat.size;
+      removed += file.stat.size;
+    }
+    if (removed > 0) {
+      console.log(`[monitor] 已清理 WSL 崩溃转储，释放 ${formatBytes(removed)}`);
+    }
+  } catch (error) {
+    console.error('[monitor] 清理崩溃转储失败', error.message);
+  }
+  return removed;
+}
+
 async function deepScan() {
   if (Date.now() - lastDeepScan < 5 * 60 * 1000) return;
   lastDeepScan = Date.now();
@@ -69,6 +115,7 @@ async function check() {
   if (running) return;
   running = true;
   try {
+    cleanupCrashDumps();
     await deepScan();
     const drive = diskFreeStats();
     const driveUsedPercent = drive.total ? 1 - drive.freePercent : 0;
@@ -152,5 +199,6 @@ function stop() {
 module.exports = {
   start,
   stop,
-  check
+  check,
+  cleanupCrashDumps
 };

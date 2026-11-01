@@ -2,12 +2,15 @@ const db = require('./db');
 const config = require('./config');
 const docker = require('./docker');
 const agents = require('./agents');
-const { addEvent } = require('./events');
+const { addEvent, notifyAgent } = require('./events');
 const { nowIso, truncate } = require('./util');
 
 let timer = null;
 let polling = false;
-const unreachableCount = new Map();
+// 桥连续无响应的起始时间；QQ/桥启动后需要十几秒才监听端口，不能刚起就判定为卡死。
+const unreachableSince = new Map();
+const lastRestartAt = new Map();
+const RESTART_GRACE_MS = 60000;
 
 function bridgePort(seq) {
   return config.bridgeBasePort + Number(seq);
@@ -77,8 +80,50 @@ function segmentsToText(segments) {
       parts.push(`[语音${segment.duration ? ` ${segment.duration}s` : ''}]`);
     } else if (segment.type === 'video') {
       parts.push(`[视频${segment.duration ? ` ${segment.duration}s` : ''}]`);
-    } else if (segment.type === 'face') parts.push('[表情]');
-    else if (segment.type === 'reply') parts.push(`[回复 msg_id=${segment.id || ''}]`);
+    } else if (segment.type === 'face') {
+      const label = String(segment.text || segment.name || (segment.id ? `#${segment.id}` : '')).trim();
+      parts.push(`[表情${label ? ` ${label}` : ''}]`);
+    } else if (segment.type === 'market_face') {
+      parts.push(`[表情 ${segment.name || segment.emoji_id || '商城表情'}]`);
+    } else if (segment.type === 'poke') {
+      const from = String(segment.sender_name || segment.sender_uid || '').trim();
+      const to = String(segment.target_name || segment.target_uid || '').trim();
+      let label = '[戳一戳';
+      if (from) label += ` ${from}`;
+      if (to) label += ` -> ${to}`;
+      if (!from && !to && segment.text) label += ` ${segment.text}`;
+      else if (!from && !to && segment.poke_type) label += ` type=${segment.poke_type}`;
+      parts.push(`${label}]`);
+    } else if (segment.type === 'gray_tip') {
+      const labels = {
+        group_join: '入群',
+        group_leave: '退群',
+        group_kick: '移出群',
+        group_title: '头衔变更',
+        group_admin: '管理员变更',
+        emoji_like: '表情互动',
+        essence: '精华消息',
+        recall_guide: '撤回提示',
+        guide: '提示',
+        system: '系统消息'
+      };
+      const label = labels[segment.kind] || '灰条消息';
+      parts.push(`[${label}${segment.text ? ` ${segment.text}` : ''}]`);
+    } else if (segment.type === 'recall') {
+      const who = String(segment.operator_name || segment.operator_uid || '').trim();
+      parts.push(`[撤回${who ? ` ${who}` : ''}${segment.wording ? `：${segment.wording}` : ''}]`);
+    } else if (segment.type === 'reply') {
+      const who = String(segment.sender_name || '').trim();
+      const quoted = String(segment.text || '').trim();
+      parts.push(quoted
+        ? `[回复${who ? ` ${who}` : ''}：${quoted}]`
+        : '[回复 [引用的消息]]');
+    } else if (segment.type === 'forward') parts.push(`[合并转发${segment.summary ? ` ${segment.summary}` : ''}]`);
+    else if (segment.type === 'ark') parts.push('[卡片消息]');
+    else if (segment.type === 'wallet') parts.push('[钱包消息]');
+    else if (segment.type === 'live_gift') parts.push('[礼物消息]');
+    else if (segment.type === 'long_msg') parts.push('[长消息]');
+    else if (segment.type === 'unknown') parts.push(`[未知消息 type=${segment.element_type ?? '?'}]`);
     else if (segment.type === 'reminder') parts.push('[定时提醒]');
   }
   return parts.join('').trim();
@@ -105,13 +150,23 @@ function deriveInbound(message) {
     .filter((segment) => segment.type === 'at')
     .map((segment) => ({ uin: String(segment.qq || ''), name: segment.name || '' }));
   const replyTo = segments.find((segment) => segment.type === 'reply') || null;
+  const events = segments
+    .filter((segment) => ['poke', 'recall', 'gray_tip'].includes(segment.type))
+    .map((segment) => ({ ...segment }));
   const isGroupLike = message?.chat_type === 'group' || message?.chat_type === 'temp';
   return {
     segments,
     attachments,
     at_list: atList,
+    events,
     reply_to: replyTo
-      ? { msg_id: String(replyTo.id || ''), seq: String(replyTo.seq || ''), sender_uin: String(replyTo.sender_uin || '') }
+      ? {
+          msg_id: String(replyTo.id || ''),
+          seq: String(replyTo.seq || ''),
+          sender_uin: String(replyTo.sender_uin || ''),
+          sender_name: String(replyTo.sender_name || ''),
+          text: String(replyTo.text || '')
+        }
       : null,
     group: isGroupLike
       ? { id: String(message?.conversation?.id || ''), name: message?.conversation?.name || '' }
@@ -132,6 +187,74 @@ function conversationKind(message) {
   return 'private';
 }
 
+// 命中词：群聊里没被 @ 时，只要文本命中词表就按“被点名”处理
+// 词表分全局（对所有群生效）和按群覆盖；返回命中的词，未命中返回 null
+function matchKeyword(agentId, conversationId, content) {
+  const text = String(content || '').toLowerCase();
+  if (!text) return null;
+  const cooldownMin = Number(config.companionKeywordCooldownMin || 0);
+  if (cooldownMin > 0) {
+    const since = new Date(Date.now() - cooldownMin * 60 * 1000).toISOString();
+    const recent = db.get(
+      `SELECT id FROM companion_messages
+        WHERE agent_id = ? AND conversation_id = ? AND trigger_word IS NOT NULL AND created_at >= ?`,
+      [agentId, conversationId, since]
+    );
+    if (recent) return null;
+  }
+  const rows = db.all(
+    `SELECT word FROM agent_keywords
+      WHERE agent_id = ? AND (scope = 'global' OR (scope = 'group' AND conversation_id = ?))
+      ORDER BY CASE WHEN scope = 'group' THEN 0 ELSE 1 END, id ASC`,
+    [agentId, conversationId]
+  );
+  for (const row of rows) {
+    const word = String(row.word || '').toLowerCase();
+    if (word && text.includes(word)) return row.word;
+  }
+  return null;
+}
+
+function listKeywords(agentId, conversationId = null) {
+  if (conversationId) {
+    return db.all(
+      `SELECT id, scope, conversation_id, word, created_at FROM agent_keywords
+        WHERE agent_id = ? AND (scope = 'global' OR (scope = 'group' AND conversation_id = ?))
+        ORDER BY CASE WHEN scope = 'group' THEN 0 ELSE 1 END, id ASC`,
+      [agentId, String(conversationId)]
+    );
+  }
+  return db.all(
+    'SELECT id, scope, conversation_id, word, created_at FROM agent_keywords WHERE agent_id = ? ORDER BY id ASC',
+    [agentId]
+  );
+}
+
+function addKeyword(agentId, { word, conversationId = '' }) {
+  const clean = String(word || '').trim();
+  if (!clean) throw new Error('命中词不能为空');
+  if (clean.length > 64) throw new Error('命中词最长 64 个字符');
+  const scope = conversationId ? 'group' : 'global';
+  const count = db.get('SELECT COUNT(*) AS n FROM agent_keywords WHERE agent_id = ?', [agentId]);
+  if (Number(count?.n || 0) >= 100) throw new Error('命中词最多 100 条，请先删除不用的');
+  db.run(
+    'INSERT OR IGNORE INTO agent_keywords (agent_id, scope, conversation_id, word, created_at) VALUES (?, ?, ?, ?, ?)',
+    [agentId, scope, String(conversationId || ''), clean, nowIso()]
+  );
+  return listKeywords(agentId, conversationId || null);
+}
+
+function removeKeyword(agentId, { word, conversationId = '' }) {
+  const clean = String(word || '').trim();
+  if (!clean) throw new Error('命中词不能为空');
+  const scope = conversationId ? 'group' : 'global';
+  const result = db.run(
+    'DELETE FROM agent_keywords WHERE agent_id = ? AND scope = ? AND conversation_id = ? AND word = ?',
+    [agentId, scope, String(conversationId || ''), clean]
+  );
+  return { removed: Number(result.changes || 0), keywords: listKeywords(agentId, conversationId || null) };
+}
+
 function insertInbound(agent, message, selfUin) {
   const bridgeId = String(message.id || '');
   if (!bridgeId) return null;
@@ -142,10 +265,23 @@ function insertInbound(agent, message, selfUin) {
   if (existing) return null;
 
   const kind = conversationKind(message);
-  const content = segmentsToText(message.segments) || '[非文本消息]';
-  const needsReply = kind === 'private' || (kind === 'group' && isAtSelf(message, selfUin)) ? 1 : 0;
   const conversation = message.conversation || {};
   const sender = message.sender || {};
+  const conversationId = String(conversation.id || sender.uin || '');
+  const content = segmentsToText(message.segments) ||
+    `[${sender.name || sender.uin || '未知用户'} 发送了非文本消息]`;
+  const noReplyTypes = new Set(['poke', 'recall', 'gray_tip', 'face', 'market_face', 'unknown']);
+  const eventOnly = Array.isArray(message.segments) && message.segments.length > 0 &&
+    message.segments.every((segment) => noReplyTypes.has(segment.type));
+  let needsReply = eventOnly
+    ? 0
+    : (kind === 'private' || (kind === 'group' && isAtSelf(message, selfUin)) ? 1 : 0);
+  // 群聊未 @ 时再看命中词：命中就等同于被点名，并额外推送一条平台通知
+  let triggerWord = null;
+  if (!eventOnly && kind === 'group' && !needsReply) {
+    triggerWord = matchKeyword(agent.id, conversationId, content);
+    if (triggerWord) needsReply = 1;
+  }
   const createdAt = message.time
     ? new Date(Number(message.time) * 1000).toISOString()
     : nowIso();
@@ -153,12 +289,12 @@ function insertInbound(agent, message, selfUin) {
   const result = db.run(
     `INSERT INTO companion_messages
       (agent_id, bridge_msg_id, conversation_id, conversation_kind, conversation_name,
-       sender_uin, sender_name, direction, content, segments_json, needs_reply, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'in', ?, ?, ?, ?)`,
+       sender_uin, sender_name, direction, content, segments_json, needs_reply, trigger_word, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'in', ?, ?, ?, ?, ?)`,
     [
       agent.id,
       bridgeId,
-      String(conversation.id || sender.uin || ''),
+      conversationId,
       kind,
       conversation.name || sender.name || null,
       String(sender.uin || ''),
@@ -166,10 +302,17 @@ function insertInbound(agent, message, selfUin) {
       truncate(content, 20000),
       JSON.stringify(message.segments || []),
       needsReply,
+      triggerWord,
       createdAt
     ]
   );
-  return Number(result.lastInsertRowid);
+  return {
+    id: Number(result.lastInsertRowid),
+    conversationId,
+    conversationName: conversation.name || sender.name || '',
+    kind,
+    triggerWord
+  };
 }
 
 function buildSegments({ kind, text, replyTo, senderUin, senderName }) {
@@ -300,7 +443,7 @@ async function revoke(agent, { conversationId, kind = 'private', messageId }) {
   });
 }
 
-async function pollAgent(agent) {
+async function pollAgent(agent, { allowDocker = true } = {}) {
   ensureState(agent.id);
   ensureBinding(agent.id);
 
@@ -316,11 +459,11 @@ async function pollAgent(agent) {
       'UPDATE qq_bindings SET bridge_ready = 0, last_error = ?, last_check_at = ?, updated_at = ? WHERE agent_id = ?',
       [truncate(error.message, 500), nowIso(), nowIso(), agent.id]
     );
-    await maybeRestartQq(agent);
+    await maybeRestartQq(agent, allowDocker);
     return;
   }
 
-  unreachableCount.delete(agent.id);
+  unreachableSince.delete(agent.id);
   const uin = String(health?.qq?.uin || '');
   const online = Boolean(health?.qq?.online);
   db.run(
@@ -367,6 +510,17 @@ async function pollAgent(agent) {
         bridge_msg_id: message.id
       });
     }
+    if (inserted?.triggerWord) {
+      addEvent(agent.id, 'keyword_hit', `群消息命中「${inserted.triggerWord}」，已按被点名处理。`, {
+        conversation_id: inserted.conversationId,
+        bridge_msg_id: message.id
+      });
+      notifyAgent(
+        agent.id,
+        `[命中词] 群 ${inserted.conversationName || inserted.conversationId} 的消息命中了「${inserted.triggerWord}」，` +
+          '已按被点名处理，需要回复。如不需要回复，可忽略这条 QQ 消息。'
+      );
+    }
   }
   if (data?.next_cursor) {
     db.run(
@@ -376,18 +530,27 @@ async function pollAgent(agent) {
   }
 }
 
-async function maybeRestartQq(agent) {
-  const count = Number(unreachableCount.get(agent.id) || 0) + 1;
-  unreachableCount.set(agent.id, count);
-  if (count < 5) return;
-  unreachableCount.set(agent.id, 0);
+async function maybeRestartQq(agent, allowDocker = true) {
+  const now = Date.now();
+  const since = Number(unreachableSince.get(agent.id) || now);
+  unreachableSince.set(agent.id, since);
+  // 桥连续无响应超过宽限期才重启；刚启动的 QQ 需要时间拉起桥，过早杀进程会让二维码永远等不到扫码。
+  if (now - since < RESTART_GRACE_MS) return;
+  // Docker 引擎不可用时无法安全地重启容器内进程，等引擎恢复后再处理。
+  if (!allowDocker) return;
+
+  // QQ 与通讯桥重启后需要几秒才开始监听；冷却期内不再重复杀进程。
+  const last = Number(lastRestartAt.get(agent.id) || 0);
+  if (now - last < config.companionRestartCooldownMs) return;
+  unreachableSince.set(agent.id, now);
+  lastRestartAt.set(agent.id, now);
 
   const info = await docker.inspectContainer(agent.container_id).catch(() => null);
   if (!info?.State?.Running) return;
 
   try {
     const exec = await docker.client().getContainer(agent.container_id).exec({
-      Cmd: ['sh', '-c', 'pkill -f /opt/QQ/qq || pkill -f QQ || true'],
+      Cmd: ['sh', '-c', 'pkill -9 -f /opt/QQ/qq || pkill -9 -f QQ || true'],
       AttachStdout: false,
       AttachStderr: false
     });
@@ -409,11 +572,15 @@ async function tick() {
     const list = db.all(
       "SELECT * FROM agents WHERE mode = 'companion' AND status NOT IN ('dead','finalizing','suspended','paused_disk') ORDER BY seq"
     );
+    // Docker 引擎卡住时 inspect 会无限挂起，导致整个轮询停摆；此时仍继续
+    // 用宿主映射的桥端口拉取状态，只是跳过容器检查与自动重启 QQ。
+    const dockerOk = await docker.isAvailable();
     for (const agent of list) {
-      if (!(await docker.isAvailable())) break;
-      const info = await docker.inspectContainer(agent.container_id).catch(() => null);
-      if (!info?.State?.Running) continue;
-      await pollAgent(agent).catch((error) => {
+      if (dockerOk) {
+        const info = await docker.inspectContainer(agent.container_id).catch(() => null);
+        if (!info?.State?.Running) continue;
+      }
+      await pollAgent(agent, { allowDocker: dockerOk }).catch((error) => {
         addEvent(agent.id, 'companion_error', `陪伴轮询失败：${error.message}`);
       });
     }
@@ -594,5 +761,10 @@ module.exports = {
   registerManager,
   removeManager,
   detectManagerKind,
-  managerKey
+  managerKey,
+  matchKeyword,
+  listKeywords,
+  addKeyword,
+  removeKeyword,
+  insertInbound
 };

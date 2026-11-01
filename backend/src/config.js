@@ -28,7 +28,12 @@ const config = {
   bridgeBasePort: Number(process.env.EA_BRIDGE_BASE_PORT || 7910),
   companionPollIntervalMs: Number(process.env.EA_COMPANION_POLL_MS || 1500),
   companionPollWaitSec: Number(process.env.EA_COMPANION_WAIT_SEC || 5),
+  // 两次自动重启 QQ 之间的最短间隔：QQ 与通讯桥刚拉起时需要时间监听端口，
+  // 没有冷却会变成“桥还没起来就被判无响应→再杀掉”的死循环。
+  companionRestartCooldownMs: Number(process.env.EA_COMPANION_RESTART_COOLDOWN_MS || 60000),
   companionMaxGroupReplyChars: Number(process.env.EA_COMPANION_GROUP_MAX || 600),
+  // 命中词触发节流：同一群 N 分钟内最多触发一次；0 表示不限制
+  companionKeywordCooldownMin: Number(process.env.EA_COMPANION_KEYWORD_COOLDOWN_MIN || 0),
   egressImage: process.env.EA_EGRESS_IMAGE || 'ea-egress:latest',
   egressContainer: 'ea-egress',
   controlNetwork: 'ea-control',

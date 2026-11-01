@@ -99,18 +99,18 @@
     <aside class="companion-side">
       <div class="companion-side-head">
         <a class="companion-agent" href="/companion/<%= agent.id %>"><%= agent.id %></a>
-        <span class="badge <%= statusClass(agent.status) %>"><%= statusText(agent.status) %></span>
+        <span class="badge <%= statusClass(agent.status) %>" id="agent-status-badge"><%= statusText(agent.status) %></span>
       </div>
       <div class="companion-side-meta">
-        <div class="meta-row"><span class="k">模型</span><span><%= agent.model %></span></div>
-        <div class="meta-row"><span class="k">QQ</span><span><%= b.uin || '未登录' %></span></div>
+        <div class="meta-row"><span class="k">模型</span><span data-meta="model"><%= agent.model %></span></div>
+        <div class="meta-row"><span class="k">QQ</span><span data-meta="qq"><%= b.uin || '未登录' %></span></div>
         <div class="meta-row"><span class="k">重启上限</span><span><%= crashLimit === null ? '不限' : crashLimit + ' 次' %></span></div>
-        <div class="meta-row"><span class="k">会话</span><span><%= fmtInt(stats.conversations) %></span></div>
-        <div class="meta-row"><span class="k">收 / 发</span><span><%= fmtInt(stats.incoming) %> / <%= fmtInt(stats.outgoing) %></span></div>
+        <div class="meta-row"><span class="k">会话</span><span data-meta="conversations"><%= fmtInt(stats.conversations) %></span></div>
+        <div class="meta-row"><span class="k">收 / 发</span><span data-meta="inout"><%= fmtInt(stats.incoming) %> / <%= fmtInt(stats.outgoing) %></span></div>
       </div>
 
       <h3>会话</h3>
-      <div class="conversation-list">
+      <div class="conversation-list" id="conversation-list">
         <% if (!conversations.length) { %>
           <div class="muted small">还没有收到消息。</div>
         <% } %>
@@ -140,8 +140,8 @@
     <section class="companion-main">
       <div class="companion-topbar">
         <div class="companion-topbar-left">
-          <span class="badge <%= b.logged_in ? 'status-running' : 'status-created' %>">QQ <%= b.logged_in ? '在线' : '离线' %></span>
-          <span class="muted small">通讯桥 <%= b.bridge_ready ? '就绪' : '未连接' %> · QQ 重启 <%= fmtInt(b.qq_restarts || 0) %> 次</span>
+          <span class="badge <%= b.logged_in ? 'status-running' : 'status-created' %>" id="qq-badge">QQ <%= b.logged_in ? '在线' : '离线' %></span>
+          <span class="muted small" id="bridge-text">通讯桥 <%= b.bridge_ready ? '就绪' : '未连接' %> · QQ 重启 <%= fmtInt(b.qq_restarts || 0) %> 次</span>
         </div>
         <div class="companion-topbar-right">
           <button class="light" type="button" id="qr-button">二维码</button>
@@ -170,6 +170,11 @@
         提示：AI 崩溃时容器会连同 QQ 一起关闭（QQ 无法脱离 AI 单独运行）；QQ 进程崩溃不影响 AI，平台会自动重启或切换账号。
       </div>
 
+      <div class="hint-bar" id="keyword-bar" style="display:none">
+        群聊命中词：<span id="keyword-list"></span>
+        <span class="muted small">（由 AI 自己设置，命中即按被点名处理）</span>
+      </div>
+
       <% if (crashed) { %>
         <div class="panel">
           <form method="post" action="/agents/<%= agent.id %>/start">
@@ -178,7 +183,7 @@
         </div>
       <% } %>
 
-      <div class="companion-chat">
+      <div class="companion-chat" id="chat-list">
         <% if (!activeConversation) { %>
           <div class="chat-empty">选择左侧会话查看聊天记录。</div>
         <% } else if (!messages.length) { %>
@@ -192,6 +197,9 @@
                 <span class="chat-time"><%= fmtDate(m.created_at) %></span>
                 <% if (m.direction === 'in' && !m.needs_reply) { %>
                   <span class="badge">未触发</span>
+                <% } %>
+                <% if (m.trigger_word) { %>
+                  <span class="badge">命中词：<%= m.trigger_word %></span>
                 <% } %>
                 <% if (m.conversation_id === '__reminder__') { %>
                   <span class="badge badge-reminder">定时提醒</span>
@@ -258,6 +266,199 @@
             });
         });
       }
+
+      // 实时刷新：每 4 秒拉一次状态，只替换变化的部分，不打断正在输入的内容。
+      var agentId = <%- JSON.stringify(agent.id) %>;
+      var activeConversation = <%- JSON.stringify(activeConversation || '') %>;
+      var lastConversationSig = '';
+      var lastMessageSig = '';
+      var lastRenderedConversation = null;
+
+      function fmtInt(value) {
+        return Number(value || 0).toLocaleString('en-US');
+      }
+
+      function kindText(kind) {
+        if (kind === 'group') return '群';
+        if (kind === 'channel') return '频道';
+        if (kind === 'system') return '提醒';
+        return '私聊';
+      }
+
+      function setMeta(key, text) {
+        var node = document.querySelector('[data-meta="' + key + '"]');
+        if (node) node.textContent = text;
+      }
+
+      function renderConversations(data) {
+        var list = document.getElementById('conversation-list');
+        if (!list) return;
+        var sig = JSON.stringify([data.conversations, data.active_conversation]);
+        if (sig === lastConversationSig) return;
+        lastConversationSig = sig;
+        list.innerHTML = '';
+        if (!data.conversations.length) {
+          var empty = document.createElement('div');
+          empty.className = 'muted small';
+          empty.textContent = '还没有收到消息。';
+          list.appendChild(empty);
+          return;
+        }
+        data.conversations.forEach(function (item) {
+          var link = document.createElement('a');
+          link.className = 'conversation-item' + (item.id === data.active_conversation ? ' on' : '');
+          link.href = '/companion/' + encodeURIComponent(agentId) + '?conversation=' + encodeURIComponent(item.id);
+          var head = document.createElement('div');
+          head.className = 'conversation-name';
+          var name = document.createElement('span');
+          name.textContent = item.name || item.id;
+          var badge = document.createElement('span');
+          badge.className = 'badge';
+          badge.textContent = kindText(item.kind);
+          head.appendChild(name);
+          head.appendChild(badge);
+          var meta = document.createElement('div');
+          meta.className = 'conversation-meta';
+          var count = document.createElement('span');
+          count.textContent = fmtInt(item.count) + ' 条';
+          var time = document.createElement('span');
+          time.textContent = item.last_text || '';
+          meta.appendChild(count);
+          meta.appendChild(time);
+          link.appendChild(head);
+          link.appendChild(meta);
+          list.appendChild(link);
+        });
+      }
+
+      function renderMessages(data) {
+        var chat = document.getElementById('chat-list');
+        if (!chat) return;
+        var sig = JSON.stringify(data.messages);
+        if (sig === lastMessageSig) return;
+        lastMessageSig = sig;
+        var nearBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 80;
+        var conversationChanged = data.active_conversation !== lastRenderedConversation;
+        lastRenderedConversation = data.active_conversation;
+        chat.innerHTML = '';
+        if (!data.active_conversation) {
+          var empty = document.createElement('div');
+          empty.className = 'chat-empty';
+          empty.textContent = '选择左侧会话查看聊天记录。';
+          chat.appendChild(empty);
+          return;
+        }
+        if (!data.messages.length) {
+          var empty2 = document.createElement('div');
+          empty2.className = 'chat-empty';
+          empty2.textContent = '该会话还没有消息。';
+          chat.appendChild(empty2);
+          return;
+        }
+        data.messages.forEach(function (message) {
+          var row = document.createElement('div');
+          row.className = 'chat-row ' + (message.direction === 'in' ? 'incoming' : 'outgoing');
+          var bubble = document.createElement('div');
+          bubble.className = 'chat-bubble';
+          var meta = document.createElement('div');
+          meta.className = 'chat-meta';
+          var who = document.createElement('span');
+          who.className = 'chat-who';
+          who.textContent = message.who;
+          var time = document.createElement('span');
+          time.className = 'chat-time';
+          time.textContent = message.time || '';
+          meta.appendChild(who);
+          meta.appendChild(time);
+          if (message.direction === 'in' && !message.needs_reply) {
+            var skipped = document.createElement('span');
+            skipped.className = 'badge';
+            skipped.textContent = '未触发';
+            meta.appendChild(skipped);
+          }
+          if (message.trigger_word) {
+            var hit = document.createElement('span');
+            hit.className = 'badge';
+            hit.textContent = '命中词：' + message.trigger_word;
+            meta.appendChild(hit);
+          }
+          if (message.reminder) {
+            var reminder = document.createElement('span');
+            reminder.className = 'badge badge-reminder';
+            reminder.textContent = '定时提醒';
+            meta.appendChild(reminder);
+          }
+          var content = document.createElement('div');
+          content.className = 'chat-content';
+          content.textContent = message.content || '';
+          bubble.appendChild(meta);
+          bubble.appendChild(content);
+          row.appendChild(bubble);
+          chat.appendChild(row);
+        });
+        // 进入页面或切换会话时直接到底部；只有用户正在看历史时才保持当前位置
+        if (conversationChanged || nearBottom) chat.scrollTop = chat.scrollHeight;
+      }
+
+      function renderKeywords(data) {
+        var bar = document.getElementById('keyword-bar');
+        var list = document.getElementById('keyword-list');
+        if (!bar || !list) return;
+        var items = Array.isArray(data.keywords) ? data.keywords : [];
+        if (!items.length) {
+          bar.style.display = 'none';
+          return;
+        }
+        bar.style.display = 'block';
+        list.textContent = items
+          .map(function (item) { return item.word + (item.scope === 'group' ? '（本群）' : ''); })
+          .join('、');
+      }
+
+      function applyLive(data) {
+        var statusBadge = document.getElementById('agent-status-badge');
+        if (statusBadge) {
+          statusBadge.className = 'badge ' + data.status_class;
+          statusBadge.textContent = data.status_text;
+        }
+        var qqBadge = document.getElementById('qq-badge');
+        if (qqBadge) {
+          qqBadge.className = 'badge ' + (data.binding.logged_in ? 'status-running' : 'status-created');
+          qqBadge.textContent = 'QQ ' + (data.binding.logged_in ? '在线' : '离线');
+        }
+        var bridge = document.getElementById('bridge-text');
+        if (bridge) {
+          bridge.textContent = '通讯桥 ' + (data.binding.bridge_ready ? '就绪' : '未连接') + ' · QQ 重启 ' + fmtInt(data.binding.qq_restarts) + ' 次';
+        }
+        setMeta('model', data.model);
+        setMeta('qq', data.binding.uin || '未登录');
+        setMeta('conversations', fmtInt(data.stats.conversations));
+        setMeta('inout', fmtInt(data.stats.incoming) + ' / ' + fmtInt(data.stats.outgoing));
+        if (data.binding.logged_in) {
+          document.querySelectorAll('.alert-bar').forEach(function (node) {
+            if (node.textContent.indexOf('QQ 离线') >= 0) node.remove();
+          });
+        }
+        renderConversations(data);
+        renderKeywords(data);
+        renderMessages(data);
+      }
+
+      function tick() {
+        if (document.hidden) return;
+        var url = '/companion/' + encodeURIComponent(agentId) + '/live?conversation=' + encodeURIComponent(activeConversation);
+        fetch(url, { headers: { Accept: 'application/json' } })
+          .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+          .then(applyLive)
+          .catch(function () {});
+      }
+
+      tick();
+      setInterval(tick, 4000);
+
+      // 首次进入页面时服务端已渲染消息，直接滚到底部，避免每次手动翻
+      var initialChat = document.getElementById('chat-list');
+      if (initialChat) initialChat.scrollTop = initialChat.scrollHeight;
     })();
   </script>
 <% } %>

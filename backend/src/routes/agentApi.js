@@ -11,6 +11,7 @@ const events = require('../events');
 const inbox = require('../inbox');
 const companion = require('../companion');
 const reminders = require('../reminders');
+const prompts = require('../prompts');
 const { authAgent } = require('../proxy');
 const { nowIso, truncate, fingerprintText } = require('../util');
 
@@ -461,6 +462,57 @@ router.post('/event', (req, res) => {
 });
 
 // 陪伴模式：AI 运行时从平台取待回复消息，并通过平台转发到 QQ。
+router.get('/persona', (req, res) => {
+  const agent = req.agent;
+  res.json({
+    id: agent.id,
+    mode: agent.mode,
+    persona_mode: agent.persona_mode || 'single',
+    persona: prompts.personaBlock(agent).trim()
+  });
+});
+
+// 群聊命中词：AI 自己维护，scope 由是否传 conversation_id 决定
+router.get('/keywords', (req, res) => {
+  const agent = req.agent;
+  if (agent.mode !== 'companion') {
+    return res.status(400).json({ error: { message: '该 AI 不是陪伴模式' } });
+  }
+  const conversationId = String(req.query.conversation_id || '').trim();
+  res.json({
+    cooldown_minutes: Number(config.companionKeywordCooldownMin || 0),
+    keywords: companion.listKeywords(agent.id, conversationId || null)
+  });
+});
+
+router.post('/keywords', (req, res) => {
+  const agent = req.agent;
+  if (agent.mode !== 'companion') {
+    return res.status(400).json({ error: { message: '该 AI 不是陪伴模式' } });
+  }
+  try {
+    const conversationId = String(req.body?.conversation_id || '').trim();
+    const keywords = companion.addKeyword(agent.id, { word: req.body?.word, conversationId });
+    res.json({ ok: true, keywords });
+  } catch (error) {
+    res.status(400).json({ error: { message: error.message } });
+  }
+});
+
+router.post('/keywords/remove', (req, res) => {
+  const agent = req.agent;
+  if (agent.mode !== 'companion') {
+    return res.status(400).json({ error: { message: '该 AI 不是陪伴模式' } });
+  }
+  try {
+    const conversationId = String(req.body?.conversation_id || '').trim();
+    const result = companion.removeKeyword(agent.id, { word: req.body?.word, conversationId });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ error: { message: error.message } });
+  }
+});
+
 router.get('/companion/inbox', (req, res) => {
   const agent = req.agent;
   if (agent.mode !== 'companion') {
@@ -490,10 +542,12 @@ router.get('/companion/inbox', (req, res) => {
       sender_uin: row.sender_uin,
       sender_name: row.sender_name,
       content: row.content,
+      needs_reply: row.needs_reply,
       created_at: row.created_at,
       segments,
       attachments: derived.attachments,
       at_list: derived.at_list,
+      events: derived.events,
       reply_to: derived.reply_to,
       group: derived.group,
       context: companion.contextFor(agent.id, row.conversation_id, row.id, 6).map((item) => ({

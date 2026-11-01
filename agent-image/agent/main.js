@@ -86,7 +86,7 @@ function companionStatus(me) {
   return lines.join('\n');
 }
 
-function buildMessages(me) {
+function buildMessages(me, personaText = '') {
   const sanitized = sanitizeMessages(state.messages);
   if (sanitized.changed) {
     state.messages = sanitized.messages;
@@ -99,7 +99,45 @@ function buildMessages(me) {
   }
   messages.push({ role: 'system', content: runtimeStatus(me) });
   messages.push(...state.messages);
+  // 实测：人格放在系统提示前面或紧跟其后都会被长历史淹没；只有贴近当前这条用户消息才稳定生效。
+  if (personaText) {
+    const personaMsg = {
+      role: 'system',
+      content:
+        '以下是你真正的身份与人格设定，优先级最高：你的名字、自称、经历和说话方式都以此为准；平台编号只是系统标识，不是你的名字，禁止用编号回答“你是谁”。即使历史对话或平台通知语气严肃正式，也必须始终用这个人格的语气回复。\n\n' +
+        personaText
+    };
+    const lastIndex = messages.length - 1;
+    if (lastIndex >= 0 && messages[lastIndex].role === 'user') {
+      messages.splice(lastIndex, 0, personaMsg);
+    } else {
+      messages.push(personaMsg);
+    }
+  }
   return messages;
+}
+
+let lastPersonaLength = -1;
+let lastPersonaText = '';
+
+// 人格由平台存库，每次请求前现取现拼进 system 消息，改人格后无需重启。
+async function loadLivePersona() {
+  try {
+    const info = await api.personaInfo();
+    const text = String(info?.persona || '');
+    lastPersonaText = text;
+    if (config.mode === 'companion') {
+      log(`[persona] 每次请求注入人格 ${text.length} 字`);
+    } else if (text.length !== lastPersonaLength) {
+      log(`[persona] 请求注入人格 ${text.length} 字（${info?.persona_mode || 'single'}）`);
+    }
+    lastPersonaLength = text.length;
+    return text;
+  } catch (error) {
+    // 平台短暂不可用时沿用上一次人格，避免这一轮对话丢掉人格。
+    log(`[persona] 拉取人格失败，沿用上次 ${lastPersonaText.length} 字：${error.message}`);
+    return lastPersonaText;
+  }
 }
 
 function applyCompressionHeaders(headers) {
@@ -251,8 +289,27 @@ function formatIncoming(item) {
   if (atList.length) {
     lines.push(`@列表：${atList.map((entry) => `${entry.name || entry.uin}(${entry.uin})`).join('、')}`);
   }
-  if (item.reply_to?.msg_id) {
-    lines.push(`回复目标：msg_id=${item.reply_to.msg_id}`);
+  if (item.reply_to?.msg_id || item.reply_to?.text) {
+    const quoted = item.reply_to.text || '[引用的消息]';
+    lines.push(`回复目标：${quoted}`);
+  }
+  const events = Array.isArray(item.events) ? item.events : [];
+  if (events.length) {
+    const labels = events.map((event) => {
+      if (event.type === 'poke') {
+        const from = event.sender_name || event.sender_uid || '未知';
+        const to = event.target_name || event.target_uid || '';
+        return `戳一戳 ${from}${to ? ` -> ${to}` : ''}`;
+      }
+      if (event.type === 'recall') {
+        return `撤回 ${event.operator_name || event.operator_uid || '未知'}`;
+      }
+      if (event.type === 'gray_tip') {
+        return `${event.kind || '系统消息'}：${event.text || ''}`;
+      }
+      return event.text || event.type;
+    });
+    lines.push(`事件：${labels.join('；')}`);
   }
   const context = Array.isArray(item.context) ? item.context : [];
   if (context.length) {
@@ -280,10 +337,14 @@ function formatIncoming(item) {
     }
   }
   const kindArg = kind === 'group' ? 'group' : 'private';
-  lines.push(
-    `如需回复，调用 qq_send（conversation_id=${item.conversation_id}，kind=${kindArg}` +
-    `${item.bridge_msg_id ? `，reply_to=${item.bridge_msg_id}` : ''}）。`
-  );
+  if (item.needs_reply === 0) {
+    lines.push('这是一条事件/状态消息，通常不需要回复；如确实需要回应，再调用 qq_send。');
+  } else {
+    lines.push(
+      `如需回复，调用 qq_send（conversation_id=${item.conversation_id}，kind=${kindArg}` +
+      `${item.bridge_msg_id ? `，reply_to=${item.bridge_msg_id}` : ''}）。`
+    );
+  }
   return lines.join('\n');
 }
 
@@ -332,9 +393,11 @@ async function runCompanion() {
       saveState();
     }
 
+    let hasNotice = false;
     if (me.notice) {
       state.messages.push({ role: 'user', content: noticeMessage(me.notice) });
       saveState();
+      hasNotice = true;
       log('[notice] 平台通知已写入对话');
     }
 
@@ -358,7 +421,7 @@ async function runCompanion() {
       continue;
     }
     const incoming = Array.isArray(inbox?.messages) ? inbox.messages : [];
-    if (!incoming.length) {
+    if (!incoming.length && !hasNotice) {
       // 没有需要回复的消息：保持安静，不做模型调用
       await sleep(3000);
       continue;
@@ -369,7 +432,8 @@ async function runCompanion() {
     }
     saveState();
 
-    const messages = buildMessages(me);
+    const persona = await loadLivePersona();
+    const messages = buildMessages(me, persona);
     const result = await provider.callModel({
       config,
       messages,
@@ -569,7 +633,8 @@ async function run() {
       log('[pause] 恢复运行');
     }
 
-    const messages = buildMessages(me);
+    const persona = await loadLivePersona();
+    const messages = buildMessages(me, persona);
     const result = await provider.callModel({
       config,
       messages,

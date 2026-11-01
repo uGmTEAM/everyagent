@@ -1,5 +1,7 @@
 const express = require('express');
 const path = require('path');
+const http = require('http');
+const net = require('net');
 const db = require('./db');
 const config = require('./config');
 const logger = require('./logger');
@@ -58,6 +60,35 @@ function parseCookies(header) {
     result[part.slice(0, index).trim()] = decodeURIComponent(part.slice(index + 1).trim());
   }
   return result;
+}
+
+// 虚拟屏一律通过面板转发：远程访问时浏览器只需要能连面板端口，
+// 不必让宿主机的 7900+ 端口对公网开放。
+function screenTargetOf(url) {
+  const match = String(url || '').match(/^\/screen\/([^/?#]+)/);
+  if (!match) return null;
+  const rest = String(url).slice(match[0].length);
+  return {
+    id: decodeURIComponent(match[1]),
+    path: rest.startsWith('/') ? rest : `/${rest}`
+  };
+}
+
+function screenPortOf(agentId) {
+  const agent = db.get('SELECT seq, enable_screen FROM agents WHERE id = ?', [agentId]);
+  if (!agent || !agent.enable_screen) return null;
+  return config.noVncBasePort + Number(agent.seq);
+}
+
+function panelAuthorized(req) {
+  const token = db.getSetting('panel_token', '');
+  if (!token) return true;
+  if (parseCookies(req.headers.cookie).ea_panel === token) return true;
+  try {
+    return new URL(req.url, 'http://127.0.0.1').searchParams.get('token') === token;
+  } catch {
+    return false;
+  }
 }
 
 function createPanelApp() {
@@ -121,6 +152,36 @@ function createPanelApp() {
     next();
   });
 
+  // 虚拟桌面（noVNC）转发：/screen/<AI 编号>/... -> 宿主机 7900+seq 的容器内 noVNC。
+  app.use((req, res, next) => {
+    if (!req.path.startsWith('/screen/')) return next();
+    const target = screenTargetOf(req.originalUrl);
+    const port = target ? screenPortOf(target.id) : null;
+    if (!port) {
+      return res.status(404).render('error', { title: '虚拟屏不可用', message: '该 AI 未启用虚拟屏或已不存在。' });
+    }
+    const proxyReq = http.request(
+      {
+        hostname: '127.0.0.1',
+        port,
+        method: req.method,
+        path: target.path,
+        headers: { ...req.headers, host: `127.0.0.1:${port}` }
+      },
+      (proxyRes) => {
+        res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+        proxyRes.pipe(res);
+      }
+    );
+    proxyReq.on('error', (error) => {
+      if (res.headersSent) return res.destroy();
+      res
+        .status(502)
+        .render('error', { title: '虚拟屏连接失败', message: `无法连接容器内的 noVNC：${error.message}` });
+    });
+    req.pipe(proxyReq);
+  });
+
   app.use('/', adminRoutes);
 
   app.use((req, res) => {
@@ -173,6 +234,31 @@ async function main() {
   const panelServer = panelApp.listen(config.panelPort, config.panelBind, () => {
     console.log(`[panel] http://${config.panelBind}:${config.panelPort}`);
   });
+
+  // noVNC 的 WebSocket（websockify）也要走面板端口转发。
+  panelServer.on('upgrade', (req, socket, head) => {
+    const target = screenTargetOf(req.url);
+    if (!target || !panelAuthorized(req) || !screenPortOf(target.id)) {
+      socket.destroy();
+      return;
+    }
+    const port = screenPortOf(target.id);
+    const upstream = net.connect(port, '127.0.0.1', () => {
+      const lines = [`GET ${target.path} HTTP/1.1`];
+      for (let index = 0; index < req.rawHeaders.length; index += 2) {
+        const name = req.rawHeaders[index];
+        const value = req.rawHeaders[index + 1];
+        lines.push(name.toLowerCase() === 'host' ? `Host: 127.0.0.1:${port}` : `${name}: ${value}`);
+      }
+      upstream.write(`${lines.join('\r\n')}\r\n\r\n`);
+      if (head && head.length) upstream.write(head);
+    });
+    upstream.on('error', () => socket.destroy());
+    socket.on('error', () => upstream.destroy());
+    upstream.pipe(socket);
+    socket.pipe(upstream);
+  });
+
   const proxyServer = proxyApp.listen(config.backendPort, config.backendBind, () => {
     console.log(`[proxy] http://${config.backendBind}:${config.backendPort}`);
   });

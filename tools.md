@@ -774,6 +774,51 @@ node g:\everyagent\test-output\20261031-ai-forum\verify.js
 
 该服务与 everyagent 平台解耦：平台后端没有挂载论坛路由，历史 AI 的提示词未做任何改动。
 
+## 陪伴 QQ 登录与 WSL 崩溃转储（2026-11-01）
+
+- 远程访问虚拟桌面：面板新增 `/screen/<AI 编号>/...` 转发（HTTP + WebSocket），模板里不再写死 `http://127.0.0.1:7900+seq`。验证脚本 `test-output/tmp/ws-proxy-check.js`（检查 websockify 握手返回 101）。
+- QQ 扫码接口：`GET /companion/<AI 编号>/qrcode`（带面板 token）；桥健康 `http://127.0.0.1:7910+seq/health`。
+- 自动重启 QQ 增加冷却（`EA_COMPANION_RESTART_COOLDOWN_MS`，默认 60000）：QQ/通讯桥启动后需要几秒才监听，避免连续判无响应把刚起来的 QQ 反复杀掉。
+- 排障记录：QQ 进程崩溃会在 `%LOCALAPPDATA%\Temp\wsl-crashes` 生成 GB 级 dump，曾占满 C 盘导致 Docker Desktop 停引擎、桥不可达（表现为 `fetch failed`）。清理：删除该目录下 `*.dmp` 后重启 Docker Desktop；引擎无响应时用 `docker desktop start`，必要时用 WMI 分离启动：
+  `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='"G:\DockerDesktop\Docker Desktop.exe"'}`
+- 诊断脚本：`test-output/tmp/diag-companion.js`（绑定/管理者/状态）、`diag-events.js`（QQ 重启事件）、`docker-ping2.js`（两个 docker 管道）、`docker-backend-check.js`（后端 docker 可用性）。
+
+## 人格补填与面板实时刷新（2026-11-01）
+
+- 人格正文源文件：`test-output/tmp/persona-ai002.md`（AI-002「鲸鱼娘·大肥鱼」完整人格，9 个 `##` 分节）。
+- 补填脚本：`node test-output/tmp/apply-persona.js` 读取上述 Markdown，写入 `agents.persona`、`persona_mode='full'`，并刷新 `data/workspaces/AI-002/workspace/.agent/system_prompt.md`（容器重启后生效）。可改文件名后复用于其它 AI。
+- 面板编辑入口：AI 详情「AI 设置」区的人格文本框（单选 单人格/完整人格），保存走 `POST /agents/:id/persona`。
+- 陪伴面板实时：`GET /companion/:id/live?conversation=...` 返回状态 JSON，页面每 4 秒轮询；登录态、会话列表、聊天记录无需手动刷新。
+- 排查：`curl.exe -s "http://127.0.0.1:7843/companion/AI-002/live?token=114514"` 可直接查看实时状态数据。
+- 轮询健壮性：Docker 引擎卡住时 `docker.isAvailable()` 5 秒超时后仍继续用桥端口轮询（只跳过容器 inspect 与自动重启 QQ），避免 `inspectContainer` 无限挂起导致面板状态冻结。
+- QQ 桥登录阶段：`/health` 的 `qq.phase` 依次为 `waiting_qrcode`（等扫码）→ `scanned`（已扫码，等手机确认）→ `online`；`scanned` 停留超过 1 分钟通常是手机端没点“确认登录”。
+- 崩溃转储自动清理：后端 `monitor.js` 每分钟清理 `%LOCALAPPDATA%\Temp\wsl-crashes\*.dmp`（超过 60 秒或总量超 128MB 从最旧删）。该目录已做成目录联接，实际写到 `G:\everyagent\data\wsl-crashes`，不会占用 C 盘。手动检查：`Get-ChildItem "$env:LOCALAPPDATA\Temp\wsl-crashes" -Filter *.dmp`。
+- 重启按钮：重启容器 / 重启 QQ 均改为后台执行并立即回执（`restart_notice` / `message`），Docker 引擎无响应时页面不再等待。
+- QQ 自动登录：桥只在 `config.qq.account` 有值时才快速登录。平台在创建/启动陪伴容器前，会把 `.qq/account-state.json` 的 uin 回填到 `.qq/config.json`（`docker.js ensureBridgeAccount`）。账号被踢或 QQ 主动失效时仍需扫码。
+
+## 会话滚底、重启参数化、群聊命中词（2026-11-01）
+
+- 会话滚底：陪伴面板进入即停在底部；切换会话时重新滚底；用户上翻时不拽回（`companion.ejs` 里 `lastRenderedConversation` + `nearBottom` 判断）。
+- 重启策略：重启容器默认复用现有容器（保留容器内改动与 QQ 登录态），只有表单勾选「重建」（`rebuild=1`）才删容器重建。原先的持久开关 `agents.clean_on_restart` 已停用（列保留不读）。
+- 命中词（仅群聊生效）：
+  - 表 `agent_keywords(agent_id, scope, conversation_id, word)`，`scope` 为 `global`（该 AI 所有群通用）或 `group`（指定群覆盖）；
+    `companion_messages.trigger_word` 记录命中的词，面板消息气泡上显示徽章。
+  - 匹配规则：任一关键词「包含即命中」，不区分大小写；群聊消息（未 @）命中后按被点名处理（`needs_reply=1`），并额外写事件 `keyword_hit` + 平台通知（`agents.notice`）。
+  - 节流：`EA_COMPANION_KEYWORD_COOLDOWN_MIN`（`config.companionKeywordCooldownMin`，默认 0 不节流），大于 0 时同一 AI 在该时长内只触发一次。
+  - 由 AI 自己管理：工具 `keyword_set` / `keyword_remove` / `keyword_list`（`agent-image/agent/tools.js` → `/api/agent/keywords*`），管理员不锁定；面板只读展示当前词表（`/companion/:id/live` 返回 `keywords`）。
+- 验证脚本（均在 `test-output/tmp/`）：
+  - `probe-placement.js`：人格注入位置 A/B/C/D 对照（结论：插在最后一条用户消息之前最稳）。
+  - `keyword-check.js`：调 API 增删词 + `matchKeyword` 匹配断言。
+  - `keyword-insert-check.js`：`db.init()` + `companion.insertInbound` 验证群聊命中 → `needs_reply` 与 `trigger_word` 落库。
+  - `keyword-e2e.js`：通过面板广播让 AI 自己调用 `keyword_set`，验证端到端链路（测完记得 `cleanup-keyword.js` 清理测试词）。
+  - `live-check.js`：打印 `/companion/:id/live` 关键字段（登录态、桥、命中词）。
+- 镜像一致性：`ea-agent:latest` / `ea-companion:latest` 需包含本轮 `tools.js`/`api.js`/`main.js`。核验：
+  `docker run --rm --entrypoint sh ea-companion:latest -c "grep -c keyword_set /opt/agent/tools.js"`
+  （`build-images.ps1` 只构建 egress+agent，陪伴镜像走 `tools/build-companion-image.ps1`）。
+
+
+
+
 
 
 
