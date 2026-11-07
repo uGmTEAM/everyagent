@@ -15,6 +15,19 @@ sudo bash install.sh --systemd --skip-images  # 安装并启动 everyagent.servi
 Linux 下 `config.js` 的 Docker socket 默认已是 `/var/run/docker.sock`（Windows 仍是 `//./pipe/docker_engine`）。
 Windows 安装步骤见根目录 `Windows_install.md`。
 
+## install.ps1（Windows 安装脚本，发行用）
+在发行包根目录执行，完成环境检查（安装目录、Node 22.5+、npm、Docker Linux 容器、磁盘、内存、端口）→ 安装后端依赖 → 构建 `ea-egress` / `ea-agent` 镜像 → 准备 `data/` → 在 Windows「启动」文件夹创建 `EveryAgent.lnk`（登录后在后台启动平台服务）。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Check        # 只检查，不改动
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -SkipImages   # 镜像已就绪时跳过构建
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -ForceImages  # 强制重建镜像
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -NoAutostart  # 不创建自启快捷方式
+```
+
+端口沿用 `EA_PANEL_PORT`（默认 7843）/ `EA_PORT`（默认 7842）。Windows 安装步骤见根目录 `Windows_install.md`。
+
 ## tools/bakup.ps1
 编辑已有文件前的备份脚本。按用户规则在文件所在目录创建 `bakup\<时间戳>\`，只复制被编辑的文件，写入 `bakup.md` 记录，最多保留 5 份。
 
@@ -49,6 +62,26 @@ powershell -ExecutionPolicy Bypass -File tools\build-images.ps1
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\run-backend.ps1
+```
+
+## tools/start-everyagent.ps1
+Windows 快捷启动：检查 Docker（必要时拉起 Docker Desktop 并最多等 90 秒）、隐藏启动后端、等待面板就绪后打开浏览器。
+- 已在运行时再次执行只打开面板，不重复启动。
+- 日志：`data/logs/launcher.log`、`backend.out.log`、`backend.err.log`。
+- 可选参数：`-NoBrowser`（不打开浏览器）、`-SkipDockerWait`、`-PanelPort 8843`（默认读 `EA_PANEL_PORT`）。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\start-everyagent.ps1
+```
+
+## tools/install-autostart.ps1
+在 Windows「启动」文件夹创建 `EveryAgent.lnk`，登录后自动调用 `start-everyagent.ps1`（默认后台运行、不打开浏览器）。`install.ps1` 安装结束时会自动调用本脚本。
+- `-OpenPanelOnStartup`：登录后同时打开面板。
+- `-Remove`：移除自启快捷方式。
+- 移动安装目录后需重新执行以更新路径。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\install-autostart.ps1
 ```
 
 ## tools/mock-provider.js

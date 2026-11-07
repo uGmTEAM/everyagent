@@ -16,7 +16,7 @@ EveryAgent 是一个在 Docker 沙盒里自主运行多个 AI 研究体的平台
 | 磁盘 | 30 GB 空闲 | 60 GB 以上（镜像约 4 GB，每个 AI 工作区另计） |
 | 虚拟化 | 开启 BIOS 虚拟化 + WSL2 | 同左 |
 
-每个 AI 容器默认 4 GB 内存（开启虚拟屏 6 GB）、2 核 CPU。同时运行的 AI 越多，内存需求越高。
+每个 AI 容器默认 1 核 CPU、1 GB 内存；创建时可单独调大，开启虚拟屏（含陪伴模式）会自动保证至少 2 GB。同时运行的 AI 越多，内存需求越高。
 
 > ARM64 Windows 也可运行，但 `ea-agent` 镜像按 linux/amd64 构建，模拟运行会很慢，不建议发行。
 
@@ -104,7 +104,37 @@ everyagent/
 cd G:\everyagent
 ```
 
-### 4.1 环境检查（可选）
+### 4.1 一键安装（推荐）
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
+```
+
+脚本依次完成：
+
+1. 环境检查：安装目录、Node.js、npm、Docker（Linux 容器）、磁盘、内存、端口；
+2. 安装后端依赖（`backend/node_modules`）；
+3. 构建 `ea-egress:latest` 与 `ea-agent:latest`（已存在则跳过）；
+4. 准备 `data\` 目录；
+5. 创建开机自启快捷方式：登录 Windows 后在后台启动平台服务，不自动打开浏览器。
+
+常用参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `-Check` | 只做环境检查，不做任何改动 |
+| `-SkipImages` | 跳过镜像构建（镜像已准备好时） |
+| `-ForceImages` | 强制重建两个镜像 |
+| `-NoAutostart` | 不创建开机自启快捷方式 |
+| `-OpenPanelOnStartup` | 登录后同时打开面板 |
+
+安装完成后可立即启动：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\start-everyagent.ps1
+```
+
+### 4.2 环境检查（可选，手工安装时使用）
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\verify-env.ps1
@@ -112,7 +142,11 @@ powershell -ExecutionPolicy Bypass -File tools\verify-env.ps1
 
 会打印 Node、Docker、WSL、磁盘、端口（7842/7843）和已有镜像状态，不做任何改动。
 
-### 4.2 安装后端依赖
+### 4.3 手工安装
+
+不使用一键脚本时，按下面步骤操作。
+
+安装后端依赖：
 
 ```powershell
 cd backend
@@ -122,7 +156,7 @@ cd ..
 
 （`tools\run-backend.ps1` 也会在缺少 `node_modules` 时自动安装。）
 
-### 4.3 构建 Docker 镜像（首次必做）
+构建 Docker 镜像（首次必做）：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\build-images.ps1
@@ -141,6 +175,14 @@ powershell -ExecutionPolicy Bypass -File tools\run-backend.ps1
 - 面板：<http://127.0.0.1:7843>
 - AI 代理：`http://127.0.0.1:7842`（供容器出网代理回连，不要关闭）
 - **这个 PowerShell 窗口需要保持打开**；关闭窗口会停止平台。
+
+也可以改用快捷启动脚本（后台隐藏运行，不占用窗口）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\start-everyagent.ps1
+```
+
+脚本会检查 Docker（必要时拉起 Docker Desktop 并等待就绪）、隐藏启动后端，面板就绪后自动打开浏览器。运行日志在 `data\logs\launcher.log`、`backend.out.log`、`backend.err.log`。已在运行时再次执行只会直接打开面板，不会重复启动。
 
 启动后终端应看到：
 
@@ -256,21 +298,56 @@ Get-NetTCPConnection -LocalPort 7842,7843 -ErrorAction SilentlyContinue
 创建 AI 时需开启虚拟屏；镜像内已强制软件渲染（`LIBGL_ALWAYS_SOFTWARE=1` 等），若仍空白，先访问 `127.0.0.1:7900+序号` 确认 noVNC 正常，再查看容器内 `/var/log/browser.log`。
 
 **内存不足、Docker Desktop 卡死**
-减少同时运行的 AI 数量，或在 Docker Desktop Resources 中提高内存；每个开虚拟屏的 AI 占 6 GB。
+减少同时运行的 AI 数量，或在 Docker Desktop Resources 中提高内存；每个 AI 默认 1 GB，开启虚拟屏的 AI 至少 2 GB，可创建时单独调大。
 
 **中文路径或空格导致异常**
 请把发行包移动到 `G:\everyagent` 这类纯英文短路径后重新安装（Docker 挂载路径对特殊字符敏感）。
 
 ---
 
-## 9. 可选：开机自启
+## 9. 快捷启动与开机自启
 
-Docker Desktop 必须先于平台启动。用「任务计划程序」创建一个**登录时**触发的任务：
+### 9.1 一键加入 Windows 启动栏
 
-- 触发器：登录时，延迟 1 分钟（等 Docker Desktop 就绪）
-- 操作：启动程序 `powershell.exe`
-  - 参数：`-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "G:\everyagent\tools\run-backend.ps1"`
-- 勾选「不管用户是否登录都要运行」时请改用服务方式（如 NSSM），并确保运行账户可访问 Docker 命名管道。
+运行 `install.ps1` 时会自动完成本步骤；下面的命令用于手工安装、移动目录后重建，或首次补建。
+
+安装完成并至少成功启动过一次后，执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\install-autostart.ps1
+```
+
+会在 Windows「启动」文件夹创建 `EveryAgent.lnk`：
+
+```text
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\EveryAgent.lnk
+```
+
+- 登录 Windows 后自动运行 `tools\start-everyagent.ps1`，后台隐藏启动平台；
+- 默认不自动打开浏览器；如需登录后同时打开面板，加参数：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\install-autostart.ps1 -OpenPanelOnStartup
+```
+
+### 9.2 管理自启
+
+```powershell
+# 重新执行会覆盖旧快捷方式，安装目录移动后也用它更新路径
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\install-autostart.ps1
+
+# 移除自启
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\install-autostart.ps1 -Remove
+```
+
+也可以打开「任务管理器 → 启动应用」临时禁用 `EveryAgent`，无需删除快捷方式。
+
+### 9.3 注意事项
+
+- Docker Desktop 必须先于平台就绪；`start-everyagent.ps1` 会自动尝试拉起 Docker Desktop 并最多等待约 90 秒。Docker 启动较慢时，平台仍会启动，但 AI 容器可能暂时不可用。
+- 隐藏运行后没有控制台窗口可按 `Ctrl+C`。需要停止时，可在任务管理器结束占用 7843 端口的 `node.exe`；日常调试建议仍用 `tools\run-backend.ps1` 前台启动。
+- 快捷启动日志：`data\logs\launcher.log`；后端输出：`data\logs\backend.out.log`、`backend.err.log`。
+- 安装目录移动后必须重新执行安装脚本，否则快捷方式里的脚本路径会失效。
 
 ---
 
@@ -280,7 +357,7 @@ Docker Desktop 必须先于平台启动。用「任务计划程序」创建一�
 
 ```text
 backend/ agent-image/ egress-proxy/ memory-service/ tools/
-install.sh Windows_install.md
+install.sh install.ps1 Windows_install.md
 ```
 
 **不要包含**：`data/`、`credentials.md`、`.screenshots/`、`test-output/`、各级 `bakup/` 目录、`backend/node_modules/`、`*.zip`、`bilibili_client/`、`video-cli/`（后两者是独立产品，按需另发）。
@@ -290,7 +367,7 @@ install.sh Windows_install.md
 推荐用 7-Zip 打包（`Compress-Archive` 不支持排除子目录，容易把 `backend/src/bakup` 等备份和 node_modules 带进发行包）：
 
 ```powershell
-7z a -tzip everyagent-1.0.0.zip backend agent-image egress-proxy memory-service tools install.sh Windows_install.md `
+7z a -tzip everyagent-1.0.0.zip backend agent-image egress-proxy memory-service tools install.sh install.ps1 Windows_install.md `
   -xr!node_modules -xr!bakup -xr!data -xr!test-output -xr!.screenshots -xr!*.zip
 ```
 
@@ -302,7 +379,7 @@ Remove-Item $dist -Recurse -Force -ErrorAction SilentlyContinue
 foreach ($dir in "backend","agent-image","egress-proxy","memory-service","tools") {
   robocopy $dir "$dist\$dir" /E /XD node_modules bakup data .screenshots | Out-Null
 }
-Copy-Item install.sh,Windows_install.md $dist
+Copy-Item install.sh,install.ps1,Windows_install.md $dist
 Compress-Archive -Path "$dist\*" -DestinationPath everyagent-1.0.0.zip
 ```
 
