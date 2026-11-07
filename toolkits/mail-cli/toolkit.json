@@ -1,0 +1,9 @@
+{
+  "name": "mail-cli",
+  "version": "1.0.0",
+  "official": true,
+  "repo": "https://github.com/uGmTEAM/mail-cli",
+  "description": "命令行邮件客户端：收发邮件、搜索、监听新邮件（IMAP/SMTP/Gmail API/Microsoft Graph），默认 JSON 输出。",
+  "bin": ["bin"],
+  "commands": ["mail-cli"]
+}

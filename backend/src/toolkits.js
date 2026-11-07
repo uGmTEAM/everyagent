@@ -11,6 +11,21 @@ function rootDir() {
   return config.toolkitsDir;
 }
 
+// 官方工具随发行包提供（仓库根目录 toolkits/），data/toolkits/ 用于用户自行上传的工具集。
+function bundledRootDir() {
+  return path.join(__dirname, '..', '..', 'toolkits');
+}
+
+// 同名时优先使用 data/toolkits/，其次回退到内置官方工具。
+function resolveDir(name) {
+  const clean = assertName(name);
+  for (const root of [rootDir(), bundledRootDir()]) {
+    const dir = path.join(root, clean);
+    if (fs.existsSync(dir)) return dir;
+  }
+  return null;
+}
+
 function ensureRoot() {
   if (!fs.existsSync(rootDir())) fs.mkdirSync(rootDir(), { recursive: true });
   return rootDir();
@@ -42,6 +57,8 @@ function readMeta(dir, name) {
     name,
     version: String(meta.version || ''),
     description: String(meta.description || ''),
+    official: Boolean(meta.official),
+    repo: String(meta.repo || ''),
     bin: Array.isArray(meta.bin) && meta.bin.length ? meta.bin.map(String) : ['bin'],
     commands: Array.isArray(meta.commands) ? meta.commands.map(String) : []
   };
@@ -92,11 +109,14 @@ function dirBytes(dir) {
 }
 
 function describe(name) {
-  const dir = path.join(rootDir(), name);
-  if (!fs.existsSync(dir)) return null;
+  const dir = resolveDir(name);
+  if (!dir) return null;
   const meta = readMeta(dir, name);
+  const bundled = path.join(bundledRootDir(), name);
+  const official = fs.existsSync(bundled) && readMeta(bundled, name).official;
   return {
     ...meta,
+    official,
     commands: collectCommands(dir, meta),
     bytes: dirBytes(dir),
     path: dir,
@@ -105,13 +125,23 @@ function describe(name) {
 }
 
 function list() {
-  if (!fs.existsSync(rootDir())) return [];
-  const entries = fs
-    .readdirSync(rootDir(), { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
-    .map((entry) => entry.name)
-    .filter((name) => NAME_PATTERN.test(name));
-  return entries.map((name) => describe(name)).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
+  const names = new Set();
+  for (const root of [rootDir(), bundledRootDir()]) {
+    if (!fs.existsSync(root)) continue;
+    const entries = fs
+      .readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && NAME_PATTERN.test(entry.name));
+    for (const entry of entries) names.add(entry.name);
+  }
+  return [...names]
+    .map((name) => describe(name))
+    .filter(Boolean)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// 官方工具（toolkit.json 中 official: true）在创建 AI 时自动提供，无需勾选。
+function officialNames() {
+  return list().filter((item) => item.official).map((item) => item.name);
 }
 
 function get(name) {
@@ -183,23 +213,30 @@ function install({ archivePath, originalName, name }) {
 function remove(name) {
   const clean = assertName(name);
   const dir = path.join(rootDir(), clean);
-  if (!fs.existsSync(dir)) throw new Error('工具集不存在');
+  if (!fs.existsSync(dir)) {
+    if (fs.existsSync(path.join(bundledRootDir(), clean))) {
+      throw new Error('官方内置工具集不能删除');
+    }
+    throw new Error('工具集不存在');
+  }
   fs.rmSync(dir, { recursive: true, force: true });
   return clean;
 }
 
-// 每个工具集以只读方式挂载到容器 /opt/toolkits/<name>
+// 每个工具集以只读方式挂载到容器 /opt/toolkits/<name>。
+// 官方工具始终挂载（含早期创建的 AI），保证自动提供。
 function binds(names = []) {
   const result = [];
-  for (const name of names) {
+  const merged = [...new Set([...officialNames(), ...(names || [])])];
+  for (const name of merged) {
     let clean;
     try {
       clean = assertName(name);
     } catch {
       continue;
     }
-    const dir = path.join(rootDir(), clean);
-    if (!fs.existsSync(dir)) continue;
+    const dir = resolveDir(clean);
+    if (!dir) continue;
     result.push({ host: dir, target: `${CONTAINER_ROOT}/${clean}` });
   }
   return result;
@@ -245,10 +282,12 @@ function parseAgentToolkits(value) {
   }
 }
 
-// 创建时把工具集名称转成快照（名称、版本、说明、命令），写入 agents.toolkits
+// 创建时把工具集名称转成快照（名称、版本、说明、命令），写入 agents.toolkits。
+// 官方工具始终自动包含，无需在创建页勾选。
 function snapshot(names = []) {
+  const merged = [...new Set([...officialNames(), ...(names || [])])];
   const result = [];
-  for (const name of names || []) {
+  for (const name of merged) {
     const info = get(name);
     if (!info) continue;
     if (result.some((item) => item.name === info.name)) continue;
@@ -265,8 +304,10 @@ function snapshot(names = []) {
 
 module.exports = {
   rootDir,
+  bundledRootDir,
   CONTAINER_ROOT,
   list,
+  officialNames,
   get,
   install,
   remove,

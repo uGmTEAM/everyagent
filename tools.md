@@ -101,6 +101,24 @@ node tools\mock-provider.js
 在面板中把供应商接口地址填为 `http://127.0.0.1:7850/v1`，模型填 `mock-model`。Judge 判定内容包含 `MOCK_FAIL` 时会返回不通过。
 
 
+## 官方工具（随平台自动提供）
+
+目录：`toolkits/`。每个子目录是一份工具集，含 `toolkit.json`（`official: true`）与 `bin/`。平台启动时会同时扫描 `data/toolkits/`（用户上传）与仓库内 `toolkits/`（官方内置）；**同名时优先用 `data/toolkits/`**。官方工具在创建 AI 时自动挂载到容器 `/opt/toolkits/<名称>` 并加入 PATH，不需要在创建页勾选，创建页与「预设工具」页显示「官方」。官方工具集不能从面板删除。
+
+| 工具 | 命令 | 仓库 | 说明 |
+| --- | --- | --- | --- |
+| bilibili_client | `bilic` | <https://github.com/uGmTEAM/bilibili-client> | B 站登录、视频/番剧 DASH 下载、投稿、评论、弹幕、直播录制、私信 |
+| mail-cli | `mail-cli` | <https://github.com/uGmTEAM/mail-cli> | 邮箱命令行：IMAP/SMTP、Gmail API、Microsoft Graph，默认 JSON 输出 |
+| video-cli | `video` | <https://github.com/uGmTEAM/video-cli> | job.json 渲染成片、转场、字幕、BGM、水印 |
+
+仓库内的 `toolkits/` 只放运行产物（二进制、`vcli` 包），源码在各自仓库。升级时替换 `toolkits/<名称>/bin/` 或整个目录，并在 `toolkit.json` 更新 `version`。
+
+GitHub Release 资产（可直接作为工具集压缩包在「预设工具」页上传）：
+
+- bilibili-client `v0.1.0`：`bilic-0.1.0-linux-x86_64.tar.gz`
+- mail-cli `v1.0.0`：`mail-cli-toolkit-1.0.0.tar.gz`、`mail-cli-1.0.0-toolkit-linux-x86_64.tar.gz`
+- video-cli `v0.1.0`：`video-cli-toolkit-0.1.0.tar.gz`
+
 ## bilibili_client（B 站 Linux 命令行客户端）
 
 目录：`bilibili_client/`，命令名 `bilic`。功能：扫码/Cookie 登录、视频与番剧 DASH 下载、封面/字幕/弹幕、投稿与合集、评论与三连、视频弹幕定时发送、直播录制与直播弹幕、私信发送/回复/自动回复（识别并跳过自动消息）。

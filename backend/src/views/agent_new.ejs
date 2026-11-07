@@ -202,22 +202,39 @@
 
   <label>预设工具集（可选）</label>
   <% var toolkitList = (typeof toolkits !== 'undefined' && toolkits) ? toolkits : []; %>
-  <% if (toolkitList.length) { %>
+  <% var officialToolkits = toolkitList.filter(function (t) { return t.official; }); %>
+  <% var customToolkits = toolkitList.filter(function (t) { return !t.official; }); %>
+  <% if (officialToolkits.length) { %>
+    <div class="muted small">官方工具（自动提供，无需勾选）：</div>
     <div class="checks">
-      <% toolkitList.forEach(function (t) { %>
+      <% officialToolkits.forEach(function (t) { %>
+        <label class="check">
+          <input type="checkbox" checked disabled>
+          <%= t.name %><% if (t.version) { %> <span class="muted small"><%= t.version %></span><% } %>
+        </label>
+      <% }); %>
+    </div>
+    <% officialToolkits.forEach(function (t) { %>
+      <div class="muted small"><%= t.name %>：<%= t.description %>（<%= (t.commands || []).join('、') %>）</div>
+    <% }); %>
+  <% } %>
+  <% if (customToolkits.length) { %>
+    <div class="checks">
+      <% customToolkits.forEach(function (t) { %>
         <label class="check">
           <input type="checkbox" name="toolkits" value="<%= t.name %>">
           <%= t.name %><% if (t.version) { %> <span class="muted small"><%= t.version %></span><% } %>
         </label>
       <% }); %>
     </div>
-    <% toolkitList.forEach(function (t) { %>
+    <% customToolkits.forEach(function (t) { %>
       <% if (t.description) { %><div class="muted small"><%= t.name %>：<%= t.description %></div><% } %>
     <% }); %>
-  <% } else { %>
+  <% } %>
+  <% if (!toolkitList.length) { %>
     <p class="muted small">还没有预设工具集，可到 <a href="/toolkits">预设工具</a> 上传 GitHub release 压缩包（zip / tar.gz）。</p>
   <% } %>
-  <p class="muted small">勾选的工具集会只读挂载到容器 /opt/toolkits/&lt;名称&gt;，其 bin 下的可执行文件自动加入 PATH；创建后不可修改。</p>
+  <p class="muted small">官方工具会自动只读挂载到容器 /opt/toolkits/&lt;名称&gt;；勾选的工具集同样挂载，其 bin 下的可执行文件自动加入 PATH；创建后不可修改。</p>
 
   <label>单独语料（可选，可多选）</label>
   <input type="file" name="corpus" multiple>

@@ -1,0 +1,9 @@
+{
+  "name": "bilic",
+  "version": "0.1.0",
+  "official": true,
+  "repo": "https://github.com/uGmTEAM/bilibili-client",
+  "description": "B 站命令行客户端（登录、下载、投稿、评论、弹幕、直播录制），静态 Linux x86_64 二进制。",
+  "bin": ["bin"],
+  "commands": ["bilic"]
+}

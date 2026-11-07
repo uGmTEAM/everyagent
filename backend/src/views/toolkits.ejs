@@ -36,15 +36,19 @@
       <tbody>
         <% list.forEach(function (t) { %>
           <tr>
-            <td><%= t.name %></td>
+            <td><%= t.name %><% if (t.official) { %> <span class="muted small">官方</span><% } %></td>
             <td><%= t.version || '-' %></td>
             <td class="small"><%= t.description || '-' %></td>
             <td class="small"><%= t.commands.join('、') || '-' %></td>
             <td><%= fmtBytes(t.bytes) %></td>
             <td>
+              <% if (t.official) { %>
+                <span class="muted small">自动提供</span>
+              <% } else { %>
               <form method="post" action="/toolkits/<%= t.name %>/delete" onsubmit="return confirm('删除工具集 <%= t.name %>？已挂载的 AI 容器需要重建后才失效。')">
                 <button type="submit" class="danger">删除</button>
               </form>
+              <% } %>
             </td>
           </tr>
         <% }); %>

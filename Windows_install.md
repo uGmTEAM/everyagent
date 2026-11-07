@@ -89,6 +89,7 @@ everyagent/
 ├─ agent-image/       AI 运行镜像（含 agent harness、ollama、虚拟屏组件）
 ├─ egress-proxy/      容器出网白名单代理
 ├─ memory-service/    记忆库（后端直接引用）
+├─ toolkits/          官方工具（bilic、mail-cli、video-cli，自动挂载到 AI 容器）
 ├─ tools/             构建、启动、环境检查脚本
 ├─ install.sh         Linux 安装脚本
 └─ Windows_install.md 本文档
@@ -364,7 +365,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\install-autostart.ps1 
 发行包建议包含：
 
 ```text
-backend/ agent-image/ egress-proxy/ memory-service/ tools/
+backend/ agent-image/ egress-proxy/ memory-service/ toolkits/ tools/
 install.sh install.ps1 Windows_install.md
 ```
 
