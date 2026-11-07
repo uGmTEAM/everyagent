@@ -103,7 +103,9 @@ node tools\mock-provider.js
 
 ## 官方工具（随平台自动提供）
 
-目录：`toolkits/`。每个子目录是一份工具集，含 `toolkit.json`（`official: true`）与 `bin/`。平台启动时会同时扫描 `data/toolkits/`（用户上传）与仓库内 `toolkits/`（官方内置）；**同名时优先用 `data/toolkits/`**。官方工具在创建 AI 时自动挂载到容器 `/opt/toolkits/<名称>` 并加入 PATH，不需要在创建页勾选，创建页与「预设工具」页显示「官方」。官方工具集不能从面板删除。
+目录：`toolkits/`。`official-tools.json` 声明官方工具（名称、GitHub 仓库、Release 资产匹配、版本）；每个子目录是一份内置副本，含 `toolkit.json`（`official: true`）与 `bin/`。平台启动约 10 秒后按清单从各自 GitHub Release 下载 `*-toolkit-*.tar.gz`，解压保存到 `data/toolkits/<名称>/`；本地版本与清单一致时跳过，下载失败只告警、不影响已有副本。也可在「预设工具」页点「立即从 GitHub 更新官方工具」强制重下，或调用 `POST /toolkits/sync`（表单 `force=1`）。
+
+工具集同时扫描 `data/toolkits/`（下载或用户上传）与仓库内 `toolkits/`（离线内置）；**同名时优先用 `data/toolkits/`**。官方工具在创建 AI 时自动挂载到容器 `/opt/toolkits/<名称>` 并加入 PATH，不需要在创建页勾选，创建页与「预设工具」页显示「官方」。官方工具集不能从面板删除。升级工具时改仓库源码 → 发新 Release（资产名 `*-toolkit-<版本>.tar.gz`）→ 同时把 `official-tools.json` 的 `version` 改新版本。
 
 | 工具 | 命令 | 仓库 | 说明 |
 | --- | --- | --- | --- |

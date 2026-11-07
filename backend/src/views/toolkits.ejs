@@ -10,6 +10,14 @@
 <% } %>
 
 <div class="panel">
+  <p class="muted small">官方工具（bilic、mail-cli、qq-bridge-client、video-cli）在平台启动时按 <code>toolkits/official-tools.json</code> 从各自 GitHub Release 拉取，保存到 <code>data/toolkits/&lt;名称&gt;/</code>；版本一致时跳过，失败不影响已有副本。</p>
+  <form method="post" action="/toolkits/sync">
+    <input type="hidden" name="force" value="1">
+    <p><button type="submit">立即从 GitHub 更新官方工具</button> <span class="muted small">（强制重新下载全部官方工具）</span></p>
+  </form>
+</div>
+
+<div class="panel">
   <p class="muted small">上传 GitHub release 的压缩包（.zip / .tar.gz / .tgz / .tar）。平台解压到 <code>data/toolkits/&lt;名称&gt;/</code>；创建 AI 时可勾选，以只读方式挂载到容器 <code>/opt/toolkits/&lt;名称&gt;</code>，<code>bin/</code> 下的可执行文件会自动复制到 <code>/usr/local/bin</code> 并加入 PATH。</p>
   <p class="muted small">可选：在工具集根目录放 <code>toolkit.json</code>，例如 <code>{"version":"1.0.0","description":"B 站命令行客户端","bin":["bin"],"commands":["bilic"]}</code>，用于在创建页显示版本与说明。</p>
   <form method="post" action="/toolkits" enctype="multipart/form-data">

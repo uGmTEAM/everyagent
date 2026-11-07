@@ -1,0 +1,9 @@
+{
+  "name": "video-cli",
+  "version": "0.2.0",
+  "official": true,
+  "repo": "https://github.com/uGmTEAM/video-cli",
+  "description": "Linux 命令行视频制作：一份 job.json 渲染成片，支持转场、字幕、BGM、水印，所有命令支持 --json。",
+  "bin": ["bin"],
+  "commands": ["video"]
+}

@@ -595,6 +595,22 @@ router.post('/toolkits', uploadToolkit.single('archive'), asyncHandler(async (re
   }
 }));
 
+router.post('/toolkits/sync', asyncHandler(async (req, res) => {
+  try {
+    const force = req.body.force === '1' || req.query.force === '1';
+    const results = await toolkits.syncOfficial({ force });
+    const ok = results.filter((item) => item.status === 'ok').map((item) => item.name);
+    const failed = results.filter((item) => item.status === 'failed');
+    const parts = [];
+    if (ok.length) parts.push(`已更新：${ok.join('、')}`);
+    if (failed.length) parts.push(`失败：${failed.map((item) => `${item.name}（${item.error}）`).join('；')}`);
+    const message = parts.join('；') || '官方工具均为最新';
+    res.redirect(`/toolkits?${failed.length ? 'error' : 'message'}=${encodeURIComponent(message)}`);
+  } catch (error) {
+    res.redirect(`/toolkits?error=${encodeURIComponent(error.message)}`);
+  }
+}));
+
 router.post('/toolkits/:name/delete', asyncHandler(async (req, res) => {
   try {
     const name = toolkits.remove(req.params.name);

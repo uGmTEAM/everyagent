@@ -15,6 +15,7 @@ const monitor = require('./monitor');
 const companion = require('./companion');
 const reminders = require('./reminders');
 const docker = require('./docker');
+const toolkits = require('./toolkits');
 const tasks = require('./tasks');
 const events = require('./events');
 const inbox = require('./inbox');
@@ -311,6 +312,18 @@ async function main() {
   recovery.run(startup).catch((error) => {
     console.error('[recovery]', error);
   });
+
+  setTimeout(async () => {
+    try {
+      const results = await toolkits.syncOfficial();
+      const done = results.filter((item) => item.status === 'ok').map((item) => item.name);
+      const failed = results.filter((item) => item.status === 'failed');
+      if (done.length) console.log(`[toolkits] 已从 GitHub 更新官方工具：${done.join('、')}`);
+      for (const item of failed) console.warn(`[toolkits] ${item.name} 同步失败：${item.error}`);
+    } catch (error) {
+      console.warn('[toolkits]', error.message);
+    }
+  }, 10000);
 
   setTimeout(async () => {
     try {

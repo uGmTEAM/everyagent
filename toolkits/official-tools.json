@@ -1,0 +1,28 @@
+{
+  "tools": [
+    {
+      "name": "bilic",
+      "repo": "uGmTEAM/bilibili-client",
+      "asset": "bilic-toolkit-.*\\.tar\\.gz",
+      "version": "0.1.0"
+    },
+    {
+      "name": "mail-cli",
+      "repo": "uGmTEAM/mail-cli",
+      "asset": "mail-cli-toolkit-.*\\.tar\\.gz",
+      "version": "1.0.0"
+    },
+    {
+      "name": "qq-bridge-client",
+      "repo": "uGmTEAM/ai-qq-bridge",
+      "asset": "qq-bridge-client-toolkit-.*\\.tar\\.gz",
+      "version": "1.0.0"
+    },
+    {
+      "name": "video-cli",
+      "repo": "uGmTEAM/video-cli",
+      "asset": "video-cli-toolkit-.*\\.tar\\.gz",
+      "version": "0.2.0"
+    }
+  ]
+}

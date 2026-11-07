@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# video-cli 启动器：无需安装，直接调用包内模块
+set -euo pipefail
+SRC="${BASH_SOURCE[0]}"
+if command -v readlink >/dev/null 2>&1; then
+  SRC="$(readlink -f "$SRC" 2>/dev/null || echo "$SRC")"
+fi
+DIR="$(cd "$(dirname "$SRC")/.." && pwd)"
+export PYTHONPATH="$DIR${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m vcli "$@"

@@ -11,6 +11,20 @@ function rootDir() {
   return config.toolkitsDir;
 }
 
+// 官方工具由 toolkits/official-tools.json 声明，启动时从 GitHub Release 拉取并保存到 data/toolkits。
+function manifestTools() {
+  return require('./officialToolSync').readManifest();
+}
+
+function manifestNames() {
+  return manifestTools().map((tool) => tool.name);
+}
+
+function syncOfficial(options = {}) {
+  const { syncOfficial: run } = require('./officialToolSync');
+  return run({ targetRoot: rootDir(), ...options });
+}
+
 // 官方工具随发行包提供（仓库根目录 toolkits/），data/toolkits/ 用于用户自行上传的工具集。
 function bundledRootDir() {
   return path.join(__dirname, '..', '..', 'toolkits');
@@ -113,7 +127,7 @@ function describe(name) {
   if (!dir) return null;
   const meta = readMeta(dir, name);
   const bundled = path.join(bundledRootDir(), name);
-  const official = fs.existsSync(bundled) && readMeta(bundled, name).official;
+  const official = manifestNames().includes(name) || (fs.existsSync(bundled) && readMeta(bundled, name).official);
   return {
     ...meta,
     official,
@@ -306,6 +320,8 @@ module.exports = {
   rootDir,
   bundledRootDir,
   CONTAINER_ROOT,
+  manifestNames,
+  syncOfficial,
   list,
   officialNames,
   get,

@@ -27,10 +27,10 @@ mail-cli/bin/
 napcatqq-analysis/
 
 # 独立子项目（不在本仓库发行）
-bilibili_client/
-video-cli/
-biliup/
-ai-qq-bridge/
+/bilibili_client/
+/video-cli/
+/biliup/
+/ai-qq-bridge/
 
 # 编辑器与系统
 .vscode/
