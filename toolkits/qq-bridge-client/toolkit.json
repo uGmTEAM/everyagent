@@ -1,0 +1,9 @@
+{
+  "name": "qq-bridge-client",
+  "version": "1.0.0",
+  "official": true,
+  "repo": "https://github.com/uGmTEAM/ai-qq-bridge",
+  "description": "容器内 QQ 通讯桥的薄封装：查看状态、拉取消息、发送消息、历史记录、群/好友列表。",
+  "bin": ["bin"],
+  "commands": ["qq-bridge-client"]
+}

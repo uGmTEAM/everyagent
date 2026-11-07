@@ -1,0 +1,72 @@
+#!/bin/sh
+# qq-bridge-client —— 容器内 QQ 通讯桥的薄封装（curl → 127.0.0.1:3100）
+# 平台会在创建陪伴 AI 时把本工具集只读挂载到 /opt/toolkits/qq-bridge-client。
+set -u
+
+BASE="${QQ_BRIDGE_URL:-http://127.0.0.1:3100}"
+
+usage () {
+  cat <<'EOF'
+用法：qq-bridge-client <命令> [参数]
+  health                       查看桥与 QQ 状态
+  messages [limit] [wait]      拉取新消息（拉取即出队，wait 为长轮询秒数）
+  send <private|group> <id> <文本>   发送消息
+  history <private|group> <id> [limit]  读取历史消息
+  groups                       群列表
+  friends                      好友列表
+  qrcode                       获取登录二维码（base64）
+  accounts                     账号列表
+EOF
+}
+
+cmd="${1:-health}"
+shift 2>/dev/null || true
+
+case "$cmd" in
+  health)
+    curl -sS "$BASE/health"; echo
+    ;;
+  messages)
+    limit="${1:-20}"
+    wait="${2:-5}"
+    curl -sS "$BASE/v1/messages?limit=$limit&wait=$wait"; echo
+    ;;
+  send)
+    type="${1:-private}"
+    id="${2:-}"
+    shift 2 2>/dev/null || true
+    text="$*"
+    if [ -z "$id" ] || [ -z "$text" ]; then
+      echo "send 需要 <private|group> <id> <文本>" >&2
+      exit 2
+    fi
+    body=$(printf '{"target":{"type":"%s","id":"%s"},"segments":[{"type":"text","text":%s}]}' \
+      "$type" "$id" "$(printf '%s' "$text" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/')")
+    curl -sS -X POST -H 'Content-Type: application/json' -d "$body" "$BASE/v1/messages"; echo
+    ;;
+  history)
+    type="${1:-private}"
+    id="${2:-}"
+    limit="${3:-20}"
+    curl -sS "$BASE/v1/messages/history?target_type=$type&target_id=$id&limit=$limit"; echo
+    ;;
+  groups)
+    curl -sS "$BASE/v1/groups"; echo
+    ;;
+  friends)
+    curl -sS "$BASE/v1/friends"; echo
+    ;;
+  qrcode)
+    curl -sS "$BASE/v1/login/qrcode"; echo
+    ;;
+  accounts)
+    curl -sS "$BASE/v1/accounts"; echo
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac

@@ -109,6 +109,7 @@ node tools\mock-provider.js
 | --- | --- | --- | --- |
 | bilibili_client | `bilic` | <https://github.com/uGmTEAM/bilibili-client> | B 站登录、视频/番剧 DASH 下载、投稿、评论、弹幕、直播录制、私信 |
 | mail-cli | `mail-cli` | <https://github.com/uGmTEAM/mail-cli> | 邮箱命令行：IMAP/SMTP、Gmail API、Microsoft Graph，默认 JSON 输出 |
+| qq-bridge-client | `qq-bridge-client` | <https://github.com/uGmTEAM/ai-qq-bridge> | 容器内 QQ 通讯桥薄封装：状态、拉取/发送消息、历史、群与好友列表（默认 `127.0.0.1:3100`，可用 `QQ_BRIDGE_URL` 覆盖） |
 | video-cli | `video` | <https://github.com/uGmTEAM/video-cli> | job.json 渲染成片、转场、字幕、BGM、水印 |
 
 仓库内的 `toolkits/` 只放运行产物（二进制、`vcli` 包），源码在各自仓库。升级时替换 `toolkits/<名称>/bin/` 或整个目录，并在 `toolkit.json` 更新 `version`。
@@ -117,6 +118,7 @@ GitHub Release 资产（可直接作为工具集压缩包在「预设工具」�
 
 - bilibili-client `v0.1.0`：`bilic-0.1.0-linux-x86_64.tar.gz`
 - mail-cli `v1.0.0`：`mail-cli-toolkit-1.0.0.tar.gz`、`mail-cli-1.0.0-toolkit-linux-x86_64.tar.gz`
+- ai-qq-bridge `v1.0.0`：`qq-bridge-client-toolkit-1.0.0.tar.gz`
 - video-cli `v0.1.0`：`video-cli-toolkit-0.1.0.tar.gz`
 
 ## bilibili_client（B 站 Linux 命令行客户端）
