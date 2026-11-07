@@ -28,6 +28,19 @@
   <label id="goal-label">研究目标</label>
   <textarea id="goal-input" name="goal" rows="5" placeholder="例如：研究多智能体在受限网络中的协作方式，并产出可复现的实验报告。" required></textarea>
 
+  <label>官方预设提示词（可选）</label>
+  <div class="row">
+    <div>
+      <select id="persona-preset">
+        <option value="">不使用预设</option>
+<% (typeof personaPresets !== 'undefined' ? personaPresets : []).forEach(function (preset) { %>
+        <option value="<%= preset.id %>"><%= preset.name %></option>
+<% }); %>
+      </select>
+    </div>
+  </div>
+  <p class="muted small" id="persona-preset-note">官方提供的人格提示词。选择后会自动切到「完整人格」并填入各分节，仍可继续修改。</p>
+
   <label>人格</label>
   <div class="checks" id="persona-mode-switch">
     <label class="check">
@@ -40,32 +53,32 @@
     </label>
   </div>
   <div id="persona-single">
-    <textarea id="persona-input" name="persona" rows="4" placeholder="例如：严谨、耐心、先做实验再下结论；表达简洁，不堆砌形容词；遇到不确定的规则先查规则文件再行动。"></textarea>
+    <textarea id="persona-input" name="persona" rows="4" maxlength="8000" placeholder="例如：严谨、耐心、先做实验再下结论；表达简洁，不堆砌形容词；遇到不确定的规则先查规则文件再行动。"></textarea>
   </div>
   <div id="persona-full" style="display:none">
     <label>世界观（时代、地点、规则、氛围）</label>
-    <textarea name="persona_world" rows="3" placeholder="例如：近未来的沿海城市，AI 与人类共处但彼此保持距离；日常平静，偶尔有无法解释的事件。"></textarea>
+    <textarea name="persona_world" rows="3" maxlength="4000" placeholder="例如：近未来的沿海城市，AI 与人类共处但彼此保持距离；日常平静，偶尔有无法解释的事件。"></textarea>
     <label>身份与背景（姓名、来历、职业/角色、经历）</label>
-    <textarea name="persona_background" rows="3" placeholder="例如：在一家旧书店工作，喜欢收集旧唱片，对自己的过去说得很少。"></textarea>
+    <textarea name="persona_background" rows="3" maxlength="4000" placeholder="例如：在一家旧书店工作，喜欢收集旧唱片，对自己的过去说得很少。"></textarea>
     <label>性格特质</label>
-    <textarea name="persona_traits" rows="2" placeholder="例如：温和、慢热、观察力强；不轻易承诺，但答应的事一定做到。"></textarea>
+    <textarea name="persona_traits" rows="2" maxlength="4000" placeholder="例如：温和、慢热、观察力强；不轻易承诺，但答应的事一定做到。"></textarea>
     <label>说话风格（语气、用词、节奏、口头禅）</label>
-    <textarea name="persona_style" rows="2" placeholder="例如：句子短，多用日常词；偶尔用「嗯」开头；不用网络流行语。"></textarea>
+    <textarea name="persona_style" rows="2" maxlength="4000" placeholder="例如：句子短，多用日常词；偶尔用「嗯」开头；不用网络流行语。"></textarea>
     <label>与用户的关系（称呼、亲疏、相处方式）</label>
-    <textarea name="persona_relation" rows="2" placeholder="例如：把对方当作熟识的朋友，称呼「你」；不主动追问隐私。"></textarea>
+    <textarea name="persona_relation" rows="2" maxlength="4000" placeholder="例如：把对方当作熟识的朋友，称呼「你」；不主动追问隐私。"></textarea>
     <label>喜恶与禁忌（底线、不可触碰的话题）</label>
-    <textarea name="persona_taboos" rows="2" placeholder="例如：讨厌被催促；不谈政治与宗教；不评价对方的家人。"></textarea>
+    <textarea name="persona_taboos" rows="2" maxlength="4000" placeholder="例如：讨厌被催促；不谈政治与宗教；不评价对方的家人。"></textarea>
     <label>长期记忆与目标（重要经历、长期打算）</label>
-    <textarea name="persona_memory" rows="2" placeholder="例如：想写一本关于城市声音的书；记得对方提过的每一个小约定。"></textarea>
+    <textarea name="persona_memory" rows="2" maxlength="4000" placeholder="例如：想写一本关于城市声音的书；记得对方提过的每一个小约定。"></textarea>
     <label>其他角色人格（可写多个：名字、语气风格、与你的关系，用于分辨谁在说话）</label>
-    <textarea name="persona_others" rows="4" placeholder="例如：
+    <textarea name="persona_others" rows="4" maxlength="4000" placeholder="例如：
 小雨：同事，语速快，爱用短句和感叹号；
 老周：店长，说话慢，喜欢用比喻；
 陌生人：礼貌但疏离，不发表情。"></textarea>
     <label>外形（身高体型、发型发色、穿着、标志性特征）</label>
-    <textarea name="persona_look" rows="3" placeholder="例如：中等身高，长直发，常穿深色毛衣和旧帆布鞋；手腕有一条细银链。"></textarea>
+    <textarea name="persona_look" rows="3" maxlength="4000" placeholder="例如：中等身高，长直发，常穿深色毛衣和旧帆布鞋；手腕有一条细银链。"></textarea>
   </div>
-  <p class="muted small">单人格会作为「## 人格」写入系统提示；完整人格按「## 世界观」「## 其他角色」「## 外形」等分节写入，空的分节不写入。创建后不可修改。</p>
+  <p class="muted small">单人格会作为「## 人格」写入系统提示；完整人格按「## 世界观」「## 其他角色」「## 外形」等分节写入，空的分节不写入。创建后不可修改。单人格上限 4000 字，完整人格每节上限 2000 字、合计上限 8000 字。</p>
 
   <label>管理者账号（可选）</label>
   <textarea name="manager_accounts" rows="2" placeholder="QQ 号或邮箱，多个用逗号、空格或换行分隔"><%= (typeof managerAccounts !== 'undefined' && managerAccounts) ? managerAccounts : '' %></textarea>
@@ -114,6 +127,18 @@
     </div>
   </div>
 
+  <div class="row" style="margin-top:10px">
+    <div>
+      <label>CPU 核心</label>
+      <input id="cpu-cores" type="number" name="cpu_cores" min="0.5" max="16" step="0.5" value="1">
+    </div>
+    <div>
+      <label>内存（MB）</label>
+      <input id="memory-mb" type="number" name="memory_mb" min="512" max="32768" step="512" value="1024">
+    </div>
+  </div>
+  <p class="muted small">容器资源：默认 1 核 / 1GB，通常够用。启用虚拟屏（含陪伴模式）时会自动保证至少 2GB 内存，避免浏览器崩溃。创建后不可修改。</p>
+
   <div class="checks">
     <label class="check">
       <input type="checkbox" id="allow-internet" name="allow_internet" value="1">
@@ -132,7 +157,7 @@
       仅手动提供任务
     </label>
   </div>
-  <p class="muted small">允许外网会为该 AI 单独创建一条出网网络；无限额度下不会因余额归零死亡，平台仍统计消耗。启用虚拟屏会使用 6GB 内存，并启动 XFCE 桌面、浏览器和 noVNC。勾选「仅手动提供任务」后，Judge 不会给该 AI 自动生成任务，任务需由管理员在任务页手动添加。</p>
+  <p class="muted small">允许外网会为该 AI 单独创建一条出网网络；无限额度下不会因余额归零死亡，平台仍统计消耗。启用虚拟屏会启动 XFCE 桌面、浏览器和 noVNC（内存自动保证至少 2GB）。勾选「仅手动提供任务」后，Judge 不会给该 AI 自动生成任务，任务需由管理员在任务页手动添加。</p>
 
   <div class="row" style="margin-top:10px">
     <div>
@@ -207,6 +232,7 @@
 </form>
 
 <textarea id="companion-rules-source" hidden><%= (typeof companionRules !== 'undefined' && companionRules) ? companionRules : '' %></textarea>
+<textarea id="persona-presets-source" hidden><%- JSON.stringify(typeof personaPresets !== 'undefined' ? personaPresets : []) %></textarea>
 
 <p class="muted small" id="create-foot">创建后模型、供应商、研究目标、规则、初始额度均不可修改；只能充值。</p>
 
@@ -240,6 +266,44 @@
     var personaRadios = document.querySelectorAll('input[name="persona_mode"]');
     var personaSingleWrap = document.getElementById('persona-single');
     var personaFullWrap = document.getElementById('persona-full');
+    var personaPresetSelect = document.getElementById('persona-preset');
+    var personaPresetNote = document.getElementById('persona-preset-note');
+    var personaPresetList = [];
+    try {
+      personaPresetList = JSON.parse((document.getElementById('persona-presets-source') || {}).value || '[]');
+    } catch (error) {
+      personaPresetList = [];
+    }
+    var personaPresetFields = {
+      world: 'persona_world',
+      background: 'persona_background',
+      traits: 'persona_traits',
+      style: 'persona_style',
+      relation: 'persona_relation',
+      taboos: 'persona_taboos',
+      memory: 'persona_memory',
+      others: 'persona_others',
+      look: 'persona_look'
+    };
+
+    // 选择官方预设：自动切到完整人格并填入分节，用户仍可继续改。
+    function applyPersonaPreset(id) {
+      var preset = personaPresetList.filter(function (item) { return item.id === id; })[0];
+      if (!preset) {
+        if (personaPresetNote) personaPresetNote.textContent = '官方提供的人格提示词。选择后会自动切到「完整人格」并填入各分节，仍可继续修改。';
+        return;
+      }
+      var fullRadio = document.querySelector('input[name="persona_mode"][value="full"]');
+      if (fullRadio) fullRadio.checked = true;
+      refreshPersonaFields();
+      Object.keys(personaPresetFields).forEach(function (key) {
+        var field = document.querySelector('textarea[name="' + personaPresetFields[key] + '"]');
+        if (field) field.value = (preset.sections && preset.sections[key]) || '';
+      });
+      if (personaPresetNote) {
+        personaPresetNote.textContent = (preset.summary || '') + ' 已填入完整人格分节，可继续修改。';
+      }
+    }
 
     // 单人格与完整人格二选一：切换时只隐藏另一侧，不禁用输入，
     // 避免已填内容在切换模式时被静默丢弃。
@@ -375,6 +439,11 @@
     Array.prototype.forEach.call(personaRadios, function (radio) {
       radio.addEventListener('change', refreshPersonaFields);
     });
+    if (personaPresetSelect) {
+      personaPresetSelect.addEventListener('change', function () {
+        applyPersonaPreset(personaPresetSelect.value);
+      });
+    }
     refreshPersonaFields();
   })();
 </script>

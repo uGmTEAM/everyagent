@@ -1,5 +1,7 @@
 <%- include('partials/header') %>
 
+<%- slot('agent_detail.top', { agent: agent }) %>
+
 <h1><%= agent.id %> <span class="badge <%= statusClass(agent.status) %>"><%= statusText(agent.status) %></span></h1>
 
 <% if (agent.status === 'suspended') { %>
@@ -141,12 +143,59 @@
         <label class="check"><input type="radio" name="persona_mode" value="full" <%= agent.persona_mode === 'full' ? 'checked' : '' %>> 完整人格（Markdown 分节）</label>
       </div>
     </div>
-    <textarea name="persona" rows="14" style="width:100%;margin-top:8px" placeholder="完整人格可用 ## 世界观 / ## 身份与背景 / ## 性格特质 / ## 说话风格 / ## 与用户的关系 / ## 喜恶与禁忌 / ## 长期记忆与目标 / ## 其他角色 / ## 外形 分节"><%= agent.persona || '' %></textarea>
+    <textarea name="persona" rows="14" style="width:100%;margin-top:8px" maxlength="20000" placeholder="完整人格可用 ## 世界观 / ## 身份与背景 / ## 性格特质 / ## 说话风格 / ## 与用户的关系 / ## 喜恶与禁忌 / ## 长期记忆与目标 / ## 其他角色 / ## 外形 分节"><%= agent.persona || '' %></textarea>
     <p class="muted small">
-      人格只影响 AI 的语气、性格与自我设定，不能覆盖平台规则。保存后系统提示文件会立即同步，但容器里运行的进程只在启动时读取，需要点上方「重启容器」后生效；陪伴 AI 重启会连同 QQ 一起重启。
+      人格只影响 AI 的语气、性格与自我设定，不能覆盖平台规则。保存后系统提示文件会立即同步，但容器里运行的进程只在启动时读取，需要点上方「重启容器」后生效；陪伴 AI 重启会连同 QQ 一起重启。上限 20000 字。
     </p>
     <div class="shrink"><button type="submit" <%= agent.status === 'dead' || agent.status === 'finalizing' ? 'disabled' : '' %>>保存人格</button></div>
   </form>
+
+  <% if (agent.mode === 'companion') { %>
+    <% if (humanizeNotice) { %>
+      <div class="notice ok"><%= humanizeNotice %></div>
+    <% } %>
+    <% if (humanizeError) { %>
+      <div class="notice error">拟人化保存失败：<%= humanizeError %></div>
+    <% } %>
+    <form method="post" action="/agents/<%= agent.id %>/humanize" style="margin-top:14px;border-top:1px solid var(--line,#333);padding-top:12px">
+      <div class="kv">
+        <div class="k">拟人化</div>
+        <div class="checks">
+          <label class="check"><input type="checkbox" name="enabled" value="1" <%= humanize.enabled ? 'checked' : '' %>> 开启（只影响 QQ 出站消息，平台通知与邮箱不受影响）</label>
+        </div>
+      </div>
+      <div class="checks" style="margin-top:8px">
+        <label class="check"><input type="checkbox" name="style" value="1" <%= humanize.style ? 'checked' : '' %>> 口语化（禁列表/Markdown）</label>
+        <label class="check"><input type="checkbox" name="fillers" value="1" <%= humanize.fillers ? 'checked' : '' %>> 语气词</label>
+        <label class="check"><input type="checkbox" name="brief" value="1" <%= humanize.brief ? 'checked' : '' %>> 偶发短句</label>
+        <label class="check"><input type="checkbox" name="selfCorrect" value="1" <%= humanize.selfCorrect ? 'checked' : '' %>> 补一句/自我更正</label>
+        <label class="check"><input type="checkbox" name="routine" value="1" <%= humanize.routine ? 'checked' : '' %>> 作息感与称呼</label>
+        <label class="check"><input type="checkbox" name="quietNight" value="1" <%= humanize.quietNight ? 'checked' : '' %>> 深夜少话</label>
+        <label class="check"><input type="checkbox" name="readingDelay" value="1" <%= humanize.readingDelay ? 'checked' : '' %>> 看手机延迟</label>
+        <label class="check"><input type="checkbox" name="merge" value="1" <%= humanize.merge ? 'checked' : '' %>> 连发合并后再回</label>
+        <label class="check"><input type="checkbox" name="followUp" value="1" <%= humanize.followUp ? 'checked' : '' %>> 久不回补一句</label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div><label>每字延迟（毫秒）</label><input type="number" name="delayPerCharMs" min="0" max="2000" value="<%= humanize.delayPerCharMs %>"></div>
+        <div><label>单段延迟上限（毫秒）</label><input type="number" name="delayMaxMs" min="0" max="120000" value="<%= humanize.delayMaxMs %>"></div>
+        <div><label>补话等待（分钟）</label><input type="number" name="followUpMinutes" min="1" max="1440" value="<%= humanize.followUpMinutes %>"></div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <div><label>看手机延迟 白天最小（毫秒）</label><input type="number" name="dayMinMs" min="0" max="300000" value="<%= humanize.dayMinMs %>"></div>
+        <div><label>白天最大</label><input type="number" name="dayMaxMs" min="0" max="300000" value="<%= humanize.dayMaxMs %>"></div>
+        <div><label>深夜最小</label><input type="number" name="nightMinMs" min="0" max="600000" value="<%= humanize.nightMinMs %>"></div>
+        <div><label>深夜最大</label><input type="number" name="nightMaxMs" min="0" max="600000" value="<%= humanize.nightMaxMs %>"></div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <div><label>口头禅（逗号分隔）</label><input name="catchphrases" value="<%= humanize.catchphrases.join('，') %>" placeholder="嗯…，诶？，hhh"></div>
+        <div><label>口头禅概率（0–1）</label><input type="number" step="0.01" name="catchphraseChance" min="0" max="1" value="<%= humanize.catchphraseChance %>"></div>
+      </div>
+      <p class="muted small">
+        开启后按换行分段逐条发送，段尾单个「。」会去掉（「。。」及以上保留）；分片排队发送，先按“看手机延迟”等一会儿再发。保存即时生效，无需重启容器。
+      </p>
+      <div class="shrink"><button type="submit">保存拟人化设置</button></div>
+    </form>
+  <% } %>
 
   <% if (modelError) { %>
     <div class="notice error"><%= modelError %></div>
@@ -360,8 +409,8 @@
       <div class="notice error"><%= messageError %></div>
     <% } %>
     <form method="post" action="/agents/<%= agent.id %>/message">
-      <textarea name="content" rows="5" required placeholder="例如：优先完成当前任务；今晚平台会暂停，请把关键数据写入 /workspace/notes/。"></textarea>
-      <p class="muted small">留言会立即为 AI 补偿 <%= fmtInt(messageCompensation) %> tokens，并在它下一次获取运行时状态时强制唤醒（包括暂停中的 AI），作为「平台通知」送达，只送达一次。AI 死亡或归档后不能留言。</p>
+      <textarea name="content" rows="5" required maxlength="8000" placeholder="例如：优先完成当前任务；今晚平台会暂停，请把关键数据写入 /workspace/notes/。"></textarea>
+      <p class="muted small">留言会立即为 AI 补偿 <%= fmtInt(messageCompensation) %> tokens，并在它下一次获取运行时状态时强制唤醒（包括暂停中的 AI），作为「平台通知」送达，只送达一次。AI 死亡或归档后不能留言。上限 8000 字，超出部分会在正文末尾标注「已截断」。</p>
       <button type="submit">发送留言</button>
     </form>
   </div>
@@ -485,5 +534,7 @@
     </tbody>
   </table>
 <% } %>
+
+<%- slot('agent_detail.bottom', { agent: agent }) %>
 
 <%- include('partials/footer') %>

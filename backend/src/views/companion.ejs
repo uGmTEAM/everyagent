@@ -1,5 +1,7 @@
 <%- include('partials/header') %>
 
+<%- slot('companion.top') %>
+
 <% if (message) { %>
   <div class="notice ok"><%= message %></div>
 <% } %>
@@ -462,5 +464,7 @@
     })();
   </script>
 <% } %>
+
+<%- slot('companion.bottom') %>
 
 <%- include('partials/footer') %>

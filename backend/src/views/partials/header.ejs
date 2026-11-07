@@ -17,9 +17,11 @@
     <a href="/inbox" class="<%= active === 'inbox' ? 'on' : '' %>">信息<% if (typeof unreadCount !== 'undefined' && unreadCount > 0) { %><span class="badge"><%= unreadCount %></span><% } %></a>
     <a href="/broadcast?mode=<%= currentMode %>" class="<%= active === 'broadcast' ? 'on' : '' %>">留言</a>
     <a href="/toolkits" class="<%= active === 'toolkits' ? 'on' : '' %>">预设工具</a>
+    <a href="/plugins" class="<%= active === 'plugins' ? 'on' : '' %>">插件</a>
     <a href="/providers" class="<%= active === 'providers' ? 'on' : '' %>">供应商</a>
     <a href="/logs" class="<%= active === 'logs' ? 'on' : '' %>">日志</a>
     <a href="/setup" class="<%= active === 'setup' ? 'on' : '' %>">设置</a>
+    <%- typeof pluginNavHtml !== 'undefined' ? pluginNavHtml : '' %>
   </nav>
   <% } else { %>
   <nav>
@@ -28,6 +30,7 @@
     <a href="/broadcast?mode=<%= currentMode %>" class="<%= active === 'broadcast' ? 'on' : '' %>">留言</a>
     <a href="/agents/new" class="<%= active === 'new' ? 'on' : '' %>">创建 AI</a>
     <a href="/toolkits" class="<%= active === 'toolkits' ? 'on' : '' %>">预设工具</a>
+    <a href="/plugins" class="<%= active === 'plugins' ? 'on' : '' %>">插件</a>
     <a href="/providers" class="<%= active === 'providers' ? 'on' : '' %>">供应商</a>
     <a href="/judge" class="<%= active === 'judge' ? 'on' : '' %>">Judge</a>
     <a href="/oracle" class="<%= active === 'oracle' ? 'on' : '' %>">Oracle</a>
@@ -38,6 +41,7 @@
     <a href="/deaths" class="<%= active === 'deaths' ? 'on' : '' %>">死亡档案</a>
     <a href="/logs" class="<%= active === 'logs' ? 'on' : '' %>">日志</a>
     <a href="/stats" class="<%= active === 'stats' ? 'on' : '' %>">统计</a>
+    <%- typeof pluginNavHtml !== 'undefined' ? pluginNavHtml : '' %>
   </nav>
   <% } %>
   <div class="mode-switch" title="切换研究 / 陪伴模式">

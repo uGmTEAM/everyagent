@@ -1,5 +1,7 @@
 <%- include('partials/header') %>
 
+<%- slot('overview.top') %>
+
 <h1>总览</h1>
 
 <div class="grid">
@@ -41,5 +43,7 @@
     <% }); %>
   </tbody>
 </table>
+
+<%- slot('overview.bottom') %>
 
 <%- include('partials/footer') %>

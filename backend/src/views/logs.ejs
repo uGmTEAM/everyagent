@@ -5,6 +5,7 @@
 <div class="tabs">
   <a href="/logs?tab=server" class="<%= tab === 'server' ? 'on' : '' %>">服务端日志</a>
   <a href="/logs?tab=ai&agent=<%= agent %>" class="<%= tab === 'ai' ? 'on' : '' %>">AI 端日志</a>
+  <a href="/logs?tab=plugin&plugin=<%= plugin %>" class="<%= tab === 'plugin' ? 'on' : '' %>">插件日志</a>
 </div>
 
 <div class="log-toolbar">
@@ -14,6 +15,16 @@
         <option value="all" <%= agent === 'all' ? 'selected' : '' %>>全部 AI</option>
         <% agents.forEach(function (a) { %>
           <option value="<%= a.id %>" <%= agent === a.id ? 'selected' : '' %>><%= a.id %><%= a.status === 'dead' ? '（已死亡）' : '' %></option>
+        <% }); %>
+      </select>
+    </label>
+  <% } %>
+
+  <% if (tab === 'plugin') { %>
+    <label class="log-field">插件
+      <select id="log-plugin">
+        <% plugins.forEach(function (p) { %>
+          <option value="<%= p.id %>" <%= plugin === p.id ? 'selected' : '' %>><%= (p.manifest && p.manifest.name) || p.id %></option>
         <% }); %>
       </select>
     </label>
@@ -37,6 +48,8 @@
 
   <% if (tab === 'ai') { %>
     <a class="btn light" href="/logs/download?type=ai&agent=<%= agent %>">下载<% if (agent === 'all') { %>全部 AI 日志<% } else { %><%= agent %> 日志<% } %></a>
+  <% } else if (tab === 'plugin') { %>
+    <a class="btn light" href="/logs/download?type=plugin&plugin=<%= plugin %>">下载插件日志</a>
   <% } else { %>
     <a class="btn light" href="/logs/download?type=server">下载服务端日志</a>
   <% } %>
@@ -45,11 +58,14 @@
 <% if (tab === 'ai' && !agents.length) { %>
   <div class="notice">还没有 AI，暂无 AI 端日志。</div>
 <% } %>
+<% if (tab === 'plugin' && !plugins.length) { %>
+  <div class="notice">还没有安装插件，暂无插件日志。</div>
+<% } %>
 
-<pre id="log-view" class="terminal log-view" data-mode="<%= tab %>" data-agent="<%= agent %>"></pre>
+<pre id="log-view" class="terminal log-view" data-mode="<%= tab %>" data-agent="<%= agent %>" data-plugin="<%= plugin %>"></pre>
 
 <p class="muted small">
-  服务端日志只记录后端 Node 进程的 stdout/stderr；AI 端日志记录容器内 harness 的输出。
+  服务端日志只记录后端 Node 进程的 stdout/stderr；AI 端日志记录容器内 harness 的输出；插件日志由插件 worker 自己写入，按 10MB × 3 轮转。
   磁盘日志永久保留，清空视图不会删除磁盘文件。
 </p>
 

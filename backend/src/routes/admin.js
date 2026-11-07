@@ -19,8 +19,11 @@ const logger = require('../logger');
 const llm = require('../llm');
 const toolkits = require('../toolkits');
 const companion = require('../companion');
+const personaPresets = require('../personaPresets');
 const prompts = require('../prompts');
-const { formatBytes, nowIso, formatDate, tailFileLines } = require('../util');
+const restart = require('../restart');
+const plugins = require('../plugins');
+const { formatBytes, nowIso, formatDate, tailFileLines, truncate } = require('../util');
 
 const router = express.Router();
 
@@ -67,7 +70,9 @@ function recentEvents(limit = 30) {
 // 给一个 AI 投递平台留言：补偿、唤醒、记录事件（Agent 页与「留言」页共用）。
 async function deliverAdminMessage(agent, content) {
   const compensation = agent.unlimited_tokens ? 0 : config.adminMessageCompensation;
-  const message = events.addAdminMessage(agent.id, content.slice(0, 8000), compensation);
+  // 超长时保留截断标记，避免 AI 只收到半截却毫不知情
+  const body = truncate(content, config.adminMessageMaxChars);
+  const message = events.addAdminMessage(agent.id, body, compensation);
   if (compensation > 0) {
     billing.recharge(agent.id, compensation, 'admin_message');
   }
@@ -89,7 +94,7 @@ async function deliverAdminMessage(agent, content) {
   events.addEvent(
     agent.id,
     'admin_message',
-    `管理员留言（${amountText}强制唤醒）：${content.slice(0, 500)}`,
+    `管理员留言（${amountText}强制唤醒）：${content.slice(0, 500)}${content.length > 500 ? '…' : ''}`,
     { message_id: message.id, compensation }
   );
   return message;
@@ -169,6 +174,32 @@ router.get('/login', (req, res) => {
     title: '登录',
     active: 'login',
     error: req.query.error ? String(req.query.error) : null
+  });
+});
+
+// 干净重启：先回应请求再后台排空，避免这次请求本身被重启掐断。
+router.post('/control/restart', (req, res) => {
+  if (restart.isRestarting()) {
+    return res.status(409).json({ ok: false, error: '已经在重启中' });
+  }
+  const redirect = String(req.body?.redirect || '') === '1';
+  if (redirect) {
+    res.type('html').send(
+      '<!doctype html><meta charset="utf-8"><title>正在重启</title>' +
+      '<meta http-equiv="refresh" content="6;url=/setup">' +
+      '<body style="font-family:system-ui;padding:32px;line-height:1.7">' +
+      '<h2>正在重启后端</h2>' +
+      '<p>已停止接收新请求，正在等待在途请求结束（最多 8 秒），随后自动拉起新进程。</p>' +
+      '<p>本页将在 6 秒后回到设置页；若未自动跳转，请手动刷新。</p></body>'
+    );
+  } else {
+    res.status(202).json({ ok: true, message: '已开始排空并重启，约 6 秒后可用' });
+  }
+  setImmediate(() => {
+    restart.trigger('panel').catch((error) => {
+      console.error('[restart] 失败', error);
+      events.addEvent(null, 'error', `后端重启失败：${error.message}`);
+    });
   });
 });
 
@@ -382,7 +413,11 @@ router.post('/companion/:id/qq-restart', asyncHandler(async (req, res) => {
 
 router.get('/', asyncHandler(async (req, res) => {
   // 总览只属于研究模式；陪伴模式统一走 /companion，避免两种 AI 混在同一页。
-  if (res.locals.panelMode === 'companion') return res.redirect('/companion');
+  if (res.locals.panelMode === 'companion') {
+    // 带 token 访问时要把 token 一起带到跳转目标，否则会掉回登录页
+    const token = req.query.token ? `?token=${encodeURIComponent(String(req.query.token))}` : '';
+    return res.redirect(`/companion${token}`);
+  }
   const list = agents.listAgents('research');
   const dockerOk = await docker.isAvailable();
   const totals = db.get(
@@ -457,6 +492,7 @@ router.get('/agents/new', (req, res) => {
       ? 'companion'
       : (req.query.mode === 'research' ? 'research' : db.getSetting('default_mode', 'research')),
     companionRules: prompts.DEFAULT_COMPANION_RULES,
+    personaPresets: personaPresets.list(),
     managerAccounts: managerAccountsText(),
     error: req.query.error || null
   });
@@ -493,6 +529,8 @@ router.post('/agents', upload.array('corpus', 50), asyncHandler(async (req, res)
       visionBill: req.body.vision_bill === '1',
       manualTasks: req.body.manual_tasks === '1',
       mode: req.body.mode === 'companion' ? 'companion' : 'research',
+      cpuCores: Number(req.body.cpu_cores || 0) || null,
+      memoryMb: Number(req.body.memory_mb || 0) || null,
       toolkits: Array.isArray(req.body.toolkits)
         ? req.body.toolkits
         : (req.body.toolkits ? [req.body.toolkits] : []),
@@ -650,6 +688,9 @@ router.get('/agents/:id', asyncHandler(async (req, res) => {
     modelError: req.query.model_error ? String(req.query.model_error) : null,
     personaNotice: req.query.persona_notice ? String(req.query.persona_notice) : null,
     personaError: req.query.persona_error ? String(req.query.persona_error) : null,
+    humanize: companion.humanizeConfig(agent),
+    humanizeNotice: req.query.humanize_notice ? String(req.query.humanize_notice) : null,
+    humanizeError: req.query.humanize_error ? String(req.query.humanize_error) : null,
     restartNotice: req.query.restart_notice ? String(req.query.restart_notice) : null
   });
 }));
@@ -664,6 +705,39 @@ router.post('/agents/:id/persona', (req, res) => {
     res.redirect(`/agents/${id}?tab=settings&persona_notice=${encodeURIComponent('人格已保存，重启容器后生效')}`);
   } catch (error) {
     res.redirect(`/agents/${id}?tab=settings&persona_error=${encodeURIComponent(error.message)}`);
+  }
+});
+
+// 拟人化设置（仅陪伴模式）：主开关 + 各子项，保存后即时生效（无需重启容器）
+router.post('/agents/:id/humanize', (req, res) => {
+  const id = req.params.id;
+  try {
+    const body = req.body || {};
+    const flag = (key) => body[key] === '1';
+    companion.setHumanize(id, {
+      enabled: flag('enabled'),
+      style: flag('style'),
+      fillers: flag('fillers'),
+      selfCorrect: flag('selfCorrect'),
+      routine: flag('routine'),
+      brief: flag('brief'),
+      readingDelay: flag('readingDelay'),
+      merge: flag('merge'),
+      followUp: flag('followUp'),
+      quietNight: flag('quietNight'),
+      catchphrases: body.catchphrases,
+      catchphraseChance: body.catchphraseChance,
+      delayPerCharMs: body.delayPerCharMs,
+      delayMaxMs: body.delayMaxMs,
+      dayMinMs: body.dayMinMs,
+      dayMaxMs: body.dayMaxMs,
+      nightMinMs: body.nightMinMs,
+      nightMaxMs: body.nightMaxMs,
+      followUpMinutes: body.followUpMinutes
+    });
+    res.redirect(`/agents/${id}?tab=settings&humanize_notice=${encodeURIComponent('拟人化设置已保存，即时生效')}`);
+  } catch (error) {
+    res.redirect(`/agents/${id}?tab=settings&humanize_error=${encodeURIComponent(error.message)}`);
   }
 });
 
@@ -1372,18 +1446,25 @@ function keepAlive(res) {
 }
 
 router.get('/logs', (req, res) => {
-  const tab = req.query.tab === 'ai' ? 'ai' : 'server';
+  const tab = req.query.tab === 'ai' ? 'ai' : (req.query.tab === 'plugin' ? 'plugin' : 'server');
   const list = agents.listAgents();
   const requested = String(req.query.agent || 'all');
   const agent = requested === 'all' || list.some((item) => item.id === requested)
     ? requested
     : 'all';
+  const pluginList = tab === 'plugin' ? plugins.listPlugins() : [];
+  const pluginRequested = String(req.query.plugin || '');
+  const plugin = pluginList.some((item) => item.id === pluginRequested)
+    ? pluginRequested
+    : (pluginList[0]?.id || '');
   res.render('logs', {
     title: '日志',
     active: 'logs',
     tab,
     agent,
-    agents: list
+    agents: list,
+    plugins: pluginList,
+    plugin
   });
 });
 
@@ -1441,7 +1522,19 @@ router.get('/logs/ai/stream', (req, res) => {
 });
 
 router.get('/logs/download', asyncHandler(async (req, res, next) => {
-  const type = req.query.type === 'ai' ? 'ai' : 'server';
+  const type = req.query.type === 'ai' ? 'ai' : (req.query.type === 'plugin' ? 'plugin' : 'server');
+
+  if (type === 'plugin') {
+    const id = String(req.query.plugin || '');
+    if (!plugins.describe(id).record) {
+      return res.status(404).render('error', { title: '未找到', message: '插件不存在' });
+    }
+    const file = plugins.logFile(id);
+    if (!fs.existsSync(file)) {
+      return res.status(404).render('error', { title: '未找到', message: '插件日志不存在' });
+    }
+    return res.download(file, `${id}.log`);
+  }
 
   if (type === 'server') {
     const file = logger.serverLogPath();

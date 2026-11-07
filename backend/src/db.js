@@ -371,6 +371,41 @@ CREATE TABLE IF NOT EXISTS agent_keywords (
   UNIQUE(agent_id, scope, conversation_id, word)
 );
 CREATE INDEX IF NOT EXISTS idx_agent_keywords_agent ON agent_keywords(agent_id, scope);
+
+-- 拟人化“对方久不回再补一句”：记录已补过话的会话与场次，避免重复打扰
+CREATE TABLE IF NOT EXISTS companion_followups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  covered_message_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(agent_id, conversation_id, covered_message_id)
+);
+
+-- 联系人昵称缓存：QQ 消息里的 sender_name 在私聊常为空，用桥的好友列表补全
+CREATE TABLE IF NOT EXISTS companion_contacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'friend',
+  updated_at TEXT NOT NULL,
+  UNIQUE(agent_id, account_id)
+);
+
+-- 插件运行状态；插件清单本身以磁盘 manifest.json 为准
+CREATE TABLE IF NOT EXISTS plugins (
+  id TEXT PRIMARY KEY,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'stopped',
+  source_type TEXT NOT NULL DEFAULT 'upload',
+  source TEXT NOT NULL DEFAULT '',
+  installed_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  started_at TEXT,
+  last_error TEXT,
+  last_error_at TEXT
+);
 `;
 
 function ensureColumn(table, column, definition) {
@@ -391,6 +426,13 @@ function init() {
   ensureDir(path.dirname(config.dbPath));
 
   db = new DatabaseSync(config.dbPath);
+  // 插件可能在 worker 线程里直接打开同一个库，WAL + busy_timeout 避免多连接互锁。
+  try {
+    db.exec('PRAGMA journal_mode = WAL;');
+    db.exec('PRAGMA busy_timeout = 5000;');
+  } catch (error) {
+    console.warn(`[db] 切换 WAL 失败，继续使用默认日志模式：${error.message}`);
+  }
   db.exec(SCHEMA);
 
   ensureColumn('agents', 'allow_internet', 'INTEGER NOT NULL DEFAULT 0');
@@ -406,6 +448,8 @@ function init() {
   ensureColumn('agents', 'persona', 'TEXT');
   ensureColumn('agents', 'persona_mode', "TEXT NOT NULL DEFAULT 'single'");
   // inline：规则直接写进系统提示（历史 AI 保持原行为）；file：规则写入容器根目录 /PLATFORM_RULES.md
+  ensureColumn('agents', 'humanize', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('agents', 'humanize_config', "TEXT NOT NULL DEFAULT ''");
   ensureColumn('agents', 'prompt_mode', "TEXT NOT NULL DEFAULT 'inline'");
   ensureColumn('agents', 'toolkits', 'TEXT');
   ensureColumn('agents', 'mode', "TEXT NOT NULL DEFAULT 'research'");
@@ -426,9 +470,15 @@ function init() {
   ensureColumn('agents', 'crash_unlimited', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('agents', 'clean_on_restart', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('companion_messages', 'trigger_word', 'TEXT');
+  // inbox 改为「拉取不即送达」：拉取只记次数，容器回合结束显式 ack 才标记送达
+  ensureColumn('companion_messages', 'fetch_count', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('companion_messages', 'last_fetched_at', 'TEXT');
   ensureColumn('agents', 'fallback_provider_id', 'INTEGER');
   ensureColumn('agents', 'fallback_model', 'TEXT');
   ensureColumn('agents', 'wake_requested', 'INTEGER NOT NULL DEFAULT 0');
+  // 每个 AI 的容器资源：创建时可单独设置，未设置时沿用全局默认
+  ensureColumn('agents', 'cpu_cores', 'REAL');
+  ensureColumn('agents', 'memory_mb', 'INTEGER');
   ensureColumn('admin_messages', 'compensation', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('media_config', 'speech_style', "TEXT NOT NULL DEFAULT 'audio'");
   ensureColumn('media_config', 'asr_enabled', 'INTEGER NOT NULL DEFAULT 0');

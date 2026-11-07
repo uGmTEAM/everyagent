@@ -40,4 +40,17 @@
   </p>
 </form>
 
+<% if (completed) { %>
+<div class="panel">
+  <h3>后端运行时</h3>
+  <p class="muted small">只重启平台后端：先停止接收新请求、等待在途请求结束（最多 8 秒），再自动拉起新进程。不会触发异常恢复补偿，也不会重启任何 AI 容器；执行中的 AI 只是短暂取不到平台接口，会自行重试。</p>
+  <form method="post" action="/control/restart">
+    <input type="hidden" name="redirect" value="1">
+    <button type="submit" class="light">立即重启后端</button>
+  </form>
+</div>
+<% } %>
+
+<%- slot('settings.bottom') %>
+
 <%- include('partials/footer') %>

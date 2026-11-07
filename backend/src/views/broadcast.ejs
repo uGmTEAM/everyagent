@@ -20,8 +20,8 @@
       <% }); %>
     </select>
     <label>留言内容</label>
-    <textarea name="content" rows="6" required placeholder="例如：接下来一小时优先处理邮件；或者：平台已更改网络配置，请重新检查外网连通性。"></textarea>
-    <p class="muted small">留言不是任务：AI 不会把它当任务提交给 Judge；需要它回你时，它会在「信息」里用 message_admin 回复。</p>
+    <textarea name="content" rows="6" required maxlength="8000" placeholder="例如：接下来一小时优先处理邮件；或者：平台已更改网络配置，请重新检查外网连通性。"></textarea>
+    <p class="muted small">留言不是任务：AI 不会把它当任务提交给 Judge；需要它回你时，它会在「信息」里用 message_admin 回复。上限 8000 字，超出部分会在正文末尾标注「已截断」。</p>
     <button type="submit">发送</button>
   </form>
 </div>

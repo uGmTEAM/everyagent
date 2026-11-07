@@ -269,6 +269,17 @@ async function createAgentContainer(agent, { hostWorkspace, hostRulesFile = null
   }
 
   const screenEnabled = isCompanion ? true : Boolean(agent.enable_screen);
+  // 资源优先用创建 AI 时的单独配置，未设置则回退全局默认
+  const MB = 1024 * 1024;
+  const cpuCores = Math.min(
+    16,
+    Math.max(0.5, Number(agent.cpu_cores) > 0 ? Number(agent.cpu_cores) : Number(config.agentCpuCores) || 2)
+  );
+  const configuredMemoryMb = Number(agent.memory_mb) > 0
+    ? Number(agent.memory_mb)
+    : Math.round((screenEnabled ? config.agentScreenMemoryBytes : config.agentMemoryBytes) / MB);
+  // 启用虚拟屏时 Chromium 至少需要 2GB，避免 1h1g 直接把桌面撑爆
+  const memoryBytes = Math.max(configuredMemoryMb * MB, screenEnabled ? 2048 * MB : 512 * MB);
   const bridgePort = config.bridgeBasePort + agent.seq;
   const bridgePorts = isCompanion
     ? {
@@ -323,9 +334,9 @@ async function createAgentContainer(agent, { hostWorkspace, hostRulesFile = null
           : []),
         ...toolkitBinds.map((item) => `${toDockerPath(item.host)}:${item.target}:ro`)
       ],
-      NanoCpus: config.agentCpuCores * 1_000_000_000,
-      Memory: screenEnabled ? config.agentScreenMemoryBytes : config.agentMemoryBytes,
-      MemorySwap: screenEnabled ? config.agentScreenMemoryBytes : config.agentMemoryBytes,
+      NanoCpus: Math.round(cpuCores * 1_000_000_000),
+      Memory: memoryBytes,
+      MemorySwap: memoryBytes,
       // WebKit/Chromium 在 64MB /dev/shm 下容易崩溃（浏览器窗口只剩标题栏或直接退出）
       ShmSize: screenEnabled ? 512 * 1024 * 1024 : 64 * 1024 * 1024,
       PidsLimit: config.agentPidsLimit,

@@ -154,8 +154,30 @@ async function companionSend(payload) {
   });
 }
 
+// 回合结束确认本批消息已处理；模型失败时不调用，平台会重投
+async function companionAck(ids = []) {
+  return apiFetch('/api/agent/companion/ack', {
+    method: 'POST',
+    body: { ids },
+    timeoutMs: 15000
+  });
+}
+
 async function companionConversations() {
   return apiFetch('/api/agent/companion/conversations', { timeoutMs: 30000 });
+}
+
+// 插件工具：平台把插件注册的工具下发给容器，调用时再转发回平台
+async function pluginTools() {
+  return apiFetch('/api/agent/plugin-tools', { timeoutMs: 15000 });
+}
+
+async function pluginToolCall(payload) {
+  return apiFetch('/api/agent/plugin-tools/call', {
+    method: 'POST',
+    body: payload,
+    timeoutMs: 60000
+  });
 }
 
 async function companionHistory(conversationId, limit = 40) {
@@ -257,6 +279,15 @@ async function companionKeywordRemove(payload) {
   return apiFetch('/api/agent/keywords/remove', { method: 'POST', body: payload, timeoutMs: 30000 });
 }
 
+// 拟人化：每次请求前取行为提示；也可由 AI 自己开关各子项
+async function behaviorInfo() {
+  return apiFetch('/api/agent/behavior', { timeoutMs: 15000 });
+}
+
+async function humanizeSet(payload) {
+  return apiFetch('/api/agent/humanize', { method: 'POST', body: payload, timeoutMs: 30000 });
+}
+
 module.exports = {
   BACKEND_URL,
   AGENT_KEY,
@@ -277,6 +308,9 @@ module.exports = {
   companionInbox,
   personaInfo,
   companionSend,
+  companionAck,
+  pluginTools,
+  pluginToolCall,
   companionConversations,
   companionHistory,
   companionGroupMembers,
@@ -292,5 +326,7 @@ module.exports = {
   companionRegisterManager,
   companionKeywords,
   companionKeywordSet,
-  companionKeywordRemove
+  companionKeywordRemove,
+  behaviorInfo,
+  humanizeSet
 };

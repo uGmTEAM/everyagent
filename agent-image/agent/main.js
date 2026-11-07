@@ -86,7 +86,7 @@ function companionStatus(me) {
   return lines.join('\n');
 }
 
-function buildMessages(me, personaText = '') {
+function buildMessages(me, personaText = '', behaviorText = '', pluginToolText = '') {
   const sanitized = sanitizeMessages(state.messages);
   if (sanitized.changed) {
     state.messages = sanitized.messages;
@@ -98,7 +98,23 @@ function buildMessages(me, personaText = '') {
     messages.push({ role: 'system', content: `[历史摘要]\n${state.summary}` });
   }
   messages.push({ role: 'system', content: runtimeStatus(me) });
+  if (behaviorText) {
+    messages.push({
+      role: 'system',
+      content: `以下是平台已开启的拟人化聊天要求，说话方式必须遵守：\n${behaviorText}`
+    });
+  }
   messages.push(...state.messages);
+  // 插件工具说明贴近当前消息，避免被长历史淹没
+  if (pluginToolText) {
+    const toolMsg = { role: 'system', content: pluginToolText };
+    const lastIndex = messages.length - 1;
+    if (lastIndex >= 0 && messages[lastIndex].role === 'user') {
+      messages.splice(lastIndex, 0, toolMsg);
+    } else {
+      messages.push(toolMsg);
+    }
+  }
   // 实测：人格放在系统提示前面或紧跟其后都会被长历史淹没；只有贴近当前这条用户消息才稳定生效。
   if (personaText) {
     const personaMsg = {
@@ -137,6 +153,23 @@ async function loadLivePersona() {
     // 平台短暂不可用时沿用上一次人格，避免这一轮对话丢掉人格。
     log(`[persona] 拉取人格失败，沿用上次 ${lastPersonaText.length} 字：${error.message}`);
     return lastPersonaText;
+  }
+}
+
+let lastBehaviorText = '';
+
+// 拟人化行为提示同样每次请求前现取，开关改动即时生效
+async function loadLiveBehavior() {
+  try {
+    const info = await api.behaviorInfo();
+    const text = String(info?.text || '');
+    if (text !== lastBehaviorText) {
+      log(text ? `[humanize] 已开启，注入行为提示 ${text.length} 字` : '[humanize] 已关闭');
+      lastBehaviorText = text;
+    }
+    return text;
+  } catch {
+    return lastBehaviorText;
   }
 }
 
@@ -228,7 +261,65 @@ function trimState() {
   }
 }
 
+// 插件工具：定义由平台下发，执行时转发回平台插件 worker
+let pluginToolDefs = [];
+let pluginToolMap = new Map();
+let pluginToolList = [];
+
+async function loadPluginTools() {
+  try {
+    const data = await api.pluginTools();
+    const core = new Set(
+      tools.getToolDefinitions(config).map((item) => item?.function?.name).filter(Boolean)
+    );
+    const list = (Array.isArray(data?.tools) ? data.tools : []).filter(
+      (item) => item && item.name && !core.has(item.name)
+    );
+    pluginToolList = list;
+    pluginToolDefs = list.map((item) => ({
+      type: 'function',
+      function: {
+        name: item.name,
+        description: item.description || '',
+        parameters: item.parameters || { type: 'object', properties: {} }
+      }
+    }));
+    pluginToolMap = new Map(list.map((item) => [item.name, item.plugin_id]));
+    if (list.length) {
+      log(`[plugin] 已加载 ${list.length} 个插件工具：${list.map((item) => item.name).join(', ')}`);
+    }
+  } catch {
+    pluginToolDefs = [];
+    pluginToolMap = new Map();
+    pluginToolList = [];
+  }
+}
+
+function pluginToolDocText() {
+  if (!pluginToolList.length) return '';
+  return (
+    '[插件工具]\n以下工具由平台插件提供，调用方式与普通工具相同：\n' +
+    pluginToolList.map((item) => `- ${item.name}：${item.description || '（无说明）'}`).join('\n')
+  );
+}
+
 async function safeExecute(name, args) {
+  const pluginId = pluginToolMap.get(name);
+  if (pluginId) {
+    try {
+      const response = await api.pluginToolCall({ plugin_id: pluginId, tool: name, args });
+      if (response && response.ok === false) {
+        log(`[plugin] ${name} error: ${response.error}`);
+        return { ok: false, error: response.error };
+      }
+      const result = response?.result;
+      log(`[plugin] ${name} ok (${JSON.stringify(result == null ? null : result).length} bytes)`);
+      return result == null ? { ok: true } : result;
+    } catch (error) {
+      log(`[plugin] ${name} error: ${error.message}`);
+      return { ok: false, error: error.message };
+    }
+  }
   try {
     const result = await tools.executeTool({
       tool: name,
@@ -270,6 +361,16 @@ function noticeMessage(notice) {
   return lines.join('\n');
 }
 
+// 发送人展示成「昵称（QQ 号）」：私聊消息常常只有号码，必须让模型看出发言归属
+function senderLabel(name, uin) {
+  const n = String(name || '').trim();
+  const q = String(uin || '').trim();
+  if (n && q) return `${n}（QQ ${q}）`;
+  if (n) return n;
+  if (q) return `未知（QQ ${q}）`;
+  return '未知';
+}
+
 function formatIncoming(item) {
   const isReminder = (Array.isArray(item.segments) ? item.segments : []).some((segment) => segment && segment.type === 'reminder');
   if (isReminder || item.kind === 'system') {
@@ -283,7 +384,7 @@ function formatIncoming(item) {
   const kindLabel = kind === 'group' ? '群聊' : kind === 'channel' ? '频道' : '私聊';
   const groupName = item.group?.name || item.conversation_name || '';
   const lines = [
-    `[QQ 消息] 会话 ${item.conversation_id}（${kindLabel}${groupName ? `，${groupName}` : ''}），来自 ${item.sender_name || item.sender_uin || '未知'}`
+    `[QQ 消息] 会话 ${item.conversation_id}（${kindLabel}${groupName ? `，${groupName}` : ''}），来自 ${senderLabel(item.sender_name, item.sender_uin)}`
   ];
   const atList = Array.isArray(item.at_list) ? item.at_list : [];
   if (atList.length) {
@@ -313,9 +414,10 @@ function formatIncoming(item) {
   }
   const context = Array.isArray(item.context) ? item.context : [];
   if (context.length) {
-    lines.push('最近上下文：');
+    lines.push('最近上下文（每条都标注了说话人）：');
     for (const row of context) {
-      lines.push(`${row.direction === 'in' ? (row.sender_name || '对方') : '我'}：${row.content}`);
+      const who = row.direction === 'in' ? senderLabel(row.sender_name, row.sender_uin) : '我';
+      lines.push(`${who}：${row.content}`);
     }
   }
   lines.push(`新消息：${item.content}`);
@@ -427,122 +529,169 @@ async function runCompanion() {
       continue;
     }
 
+    // 平台改为「拉取不即送达」：失败回合会把同一批消息重投，这里按消息 id 去重，避免历史里堆重复的 QQ 消息
+    const seen = new Set((Array.isArray(state.companionMessageIds) ? state.companionMessageIds : []).map((id) => Number(id)));
     for (const item of incoming) {
+      const id = Number(item.id);
+      if (seen.has(id)) {
+        log(`[inbox] 消息 #${id} 已在历史中，等待 ack 或重投`);
+        continue;
+      }
+      seen.add(id);
       state.messages.push({ role: 'user', content: formatIncoming(item) });
     }
+    state.companionMessageIds = Array.from(seen).slice(-200);
     saveState();
 
-    const persona = await loadLivePersona();
-    const messages = buildMessages(me, persona);
-    const result = await provider.callModel({
-      config,
-      messages,
-      tools: tools.getToolDefinitions(config),
-      toolMode
-    });
-
-    if (result.retryText) {
-      toolMode = 'text';
-      state.toolMode = 'text';
-      saveState();
-      log(`[tool-mode] 原生工具调用不可用，切换到文本动作协议：${result.error}`);
-      continue;
-    }
-
-    if (result.fatal) {
-      log(`[fatal] 操作被拒绝：${result.error}`);
-      if (result.status === 410) process.exit(0);
-      await sleep(30000);
-      continue;
-    }
-
-    if (!result.ok) {
-      log(`[error] 操作失败：${result.error}`);
-      await sleep(10000);
-      continue;
-    }
-
-    applyCompressionHeaders(result.headers);
-    if (toolMode === 'auto' && result.message.tool_calls) {
-      toolMode = 'native';
-      state.toolMode = 'native';
-      saveState();
-      log('[tool-mode] 原生工具调用可用');
-    }
-
-    const message = result.message;
-    const assistantMessage = { role: 'assistant', content: message.content || '' };
-    if (message.tool_calls) assistantMessage.tool_calls = message.tool_calls;
-    state.messages.push(assistantMessage);
-
-    if (message.content) log(`[assistant] ${message.content.slice(0, 1500)}`);
+    const [persona, behavior] = await Promise.all([loadLivePersona(), loadLiveBehavior()]);
+    await loadPluginTools();
 
     let sentAny = false;
+    let silent = false;
     let executedActions = 0;
+    let failed = false;
 
-    if (message.tool_calls && toolMode !== 'text') {
-      for (const call of message.tool_calls) {
-        const name = call.function?.name || 'unknown';
-        let args = {};
-        try {
-          args = JSON.parse(call.function?.arguments || '{}');
-        } catch (error) {
+    // 一个回合允许多轮工具调用：模型先查资料/取数据再回复时，不能在第一轮工具后就结束，否则回复被吞
+    for (let round = 0; round < 4 && !sentAny && !silent; round += 1) {
+      const messages = buildMessages(me, persona, behavior, pluginToolDocText());
+      const result = await provider.callModel({
+        config,
+        messages,
+        tools: [...tools.getToolDefinitions(config), ...pluginToolDefs],
+        toolMode
+      });
+
+      if (result.retryText) {
+        toolMode = 'text';
+        state.toolMode = 'text';
+        saveState();
+        log(`[tool-mode] 原生工具调用不可用，切换到文本动作协议：${result.error}`);
+        continue;
+      }
+
+      if (result.fatal) {
+        log(`[fatal] 操作被拒绝：${result.error}`);
+        if (result.status === 410) process.exit(0);
+        failed = true;
+        break;
+      }
+
+      if (!result.ok) {
+        log(`[error] 操作失败：${result.error}`);
+        failed = true;
+        break;
+      }
+
+      applyCompressionHeaders(result.headers);
+      if (toolMode === 'auto' && result.message.tool_calls) {
+        toolMode = 'native';
+        state.toolMode = 'native';
+        saveState();
+        log('[tool-mode] 原生工具调用可用');
+      }
+
+      const message = result.message;
+      const assistantMessage = { role: 'assistant', content: message.content || '' };
+      if (message.tool_calls) assistantMessage.tool_calls = message.tool_calls;
+      state.messages.push(assistantMessage);
+
+      if (message.content) log(`[assistant] ${message.content.slice(0, 1500)}`);
+
+      let roundActions = 0;
+      if (message.tool_calls && toolMode !== 'text') {
+        for (const call of message.tool_calls) {
+          const name = call.function?.name || 'unknown';
+          let args = {};
+          try {
+            args = JSON.parse(call.function?.arguments || '{}');
+          } catch (error) {
+            state.messages.push({
+              role: 'tool',
+              tool_call_id: call.id,
+              name,
+              content: JSON.stringify({ ok: false, error: `工具参数 JSON 解析失败：${error.message}` })
+            });
+            continue;
+          }
+          const toolResult = await safeExecute(name, args);
+          roundActions += 1;
+          if (['qq_send', 'qq_send_media'].includes(name) && !(toolResult && toolResult.ok === false)) sentAny = true;
+          if (name === 'qq_silent' || (toolResult && toolResult.silent)) silent = true;
           state.messages.push({
             role: 'tool',
             tool_call_id: call.id,
             name,
-            content: JSON.stringify({ ok: false, error: `工具参数 JSON 解析失败：${error.message}` })
+            content: tools.truncate(JSON.stringify(toolResult), 30000)
           });
-          continue;
-        }
-        const toolResult = await safeExecute(name, args);
-        executedActions += 1;
-        if (['qq_send', 'qq_send_media'].includes(name) && !(toolResult && toolResult.ok === false)) sentAny = true;
-        state.messages.push({
-          role: 'tool',
-          tool_call_id: call.id,
-          name,
-          content: tools.truncate(JSON.stringify(toolResult), 30000)
-        });
-      }
-    } else {
-      const parsed = tools.parseActions(message.content || '');
-      if (parsed.errors.length) {
-        state.messages.push({
-          role: 'user',
-          content: `<observation>工具调用解析失败：${parsed.errors.join('；')}。请只输出合法的 JSON 动作。</observation>`
-        });
-      }
-      for (const action of parsed.actions) {
-        const toolResult = await safeExecute(action.tool, action.args);
-        executedActions += 1;
-        if (['qq_send', 'qq_send_media'].includes(action.tool) && !(toolResult && toolResult.ok === false)) sentAny = true;
-        state.messages.push({ role: 'user', content: observation(action.tool, toolResult) });
-      }
-      if (!parsed.actions.length && !parsed.errors.length) {
-        textIdleRounds += 1;
-        if (textIdleRounds >= 3 && Date.now() > nativeProbeAfter) {
-          toolMode = 'auto';
-          state.toolMode = 'auto';
-          nativeProbeAfter = Date.now() + 300000;
-          textIdleRounds = 0;
-          log('[tool-mode] 文本模式连续无动作，重新探测原生工具调用');
         }
       } else {
-        textIdleRounds = 0;
+        const parsed = tools.parseActions(message.content || '');
+        if (parsed.errors.length) {
+          state.messages.push({
+            role: 'user',
+            content: `<observation>工具调用解析失败：${parsed.errors.join('；')}。请只输出合法的 JSON 动作。</observation>`
+          });
+        }
+        for (const action of parsed.actions) {
+          const toolResult = await safeExecute(action.tool, action.args);
+          roundActions += 1;
+          if (['qq_send', 'qq_send_media'].includes(action.tool) && !(toolResult && toolResult.ok === false)) sentAny = true;
+          if (action.tool === 'qq_silent' || (toolResult && toolResult.silent)) silent = true;
+          state.messages.push({ role: 'user', content: observation(action.tool, toolResult) });
+        }
+        if (!parsed.actions.length && !parsed.errors.length) {
+          textIdleRounds += 1;
+          if (textIdleRounds >= 3 && Date.now() > nativeProbeAfter) {
+            toolMode = 'auto';
+            state.toolMode = 'auto';
+            nativeProbeAfter = Date.now() + 300000;
+            textIdleRounds = 0;
+            log('[tool-mode] 文本模式连续无动作，重新探测原生工具调用');
+          }
+        } else {
+          textIdleRounds = 0;
+        }
       }
+      executedActions += roundActions;
+
+      if (sentAny || silent) break;
+      // 本轮只调了工具、还没给对方任何回应：把工具结果继续喂回模型重新决策
+      if (roundActions > 0) {
+        state.messages.push({
+          role: 'user',
+          content:
+            '<observation>你这一轮只调用了工具，还没有给对方回复。请根据工具结果继续：' +
+            '需要回复就调用 qq_send / qq_send_media；确认不需要回复就调用 qq_silent。</observation>'
+        });
+        saveState();
+        continue;
+      }
+      // 既没有工具也没有动作：结束本回合，交给下面的纯文本自动回复
+      break;
+    }
+
+    // 模型失败/超时：不 ack，等平台重投；也不能拿上一轮的文本兜底，避免重复发送
+    if (failed) {
+      trimState();
+      saveState();
+      await sleep(10000);
+      continue;
     }
 
     // 纯文本且没有执行任何工具：把这段文本发回最新会话，避免 AI 只“自言自语”。
     const target = incoming[incoming.length - 1];
     const targetIsReminder = Array.isArray(target?.segments) && target.segments.some((segment) => segment && segment.type === 'reminder');
-    if (!sentAny && executedActions === 0 && message.content && target && !targetIsReminder) {
+    const lastContent = state.messages[state.messages.length - 1];
+    if (
+      !sentAny && !silent && executedActions === 0 && target && !targetIsReminder &&
+      lastContent && lastContent.role === 'assistant' && lastContent.content
+    ) {
       const kind = (target.kind || target.conversation_kind) === 'group' ? 'group' : 'private';
       try {
         await api.companionSend({
           conversation_id: target.conversation_id,
           kind,
-          text: companionReplyText(message.content, kind),
+          text: companionReplyText(lastContent.content, kind),
           reply_to: target.bridge_msg_id || undefined,
           sender_uin: target.sender_uin || undefined,
           sender_name: target.sender_name || undefined
@@ -551,6 +700,22 @@ async function runCompanion() {
         log(`[companion] 已自动回复 ${target.conversation_id}`);
       } catch (error) {
         log(`[companion] 自动回复失败：${error.message}`);
+      }
+    }
+
+    // 成功回复或明确决定不回复才算处理完；模型失败不 ack，把消息留给平台重投
+    const onlyNotice = !incoming.length;
+    const onlySystem = incoming.length > 0 && incoming.every((item) => (item.kind || item.conversation_kind) === 'system');
+    if (!failed && !onlyNotice && (sentAny || silent || onlySystem)) {
+      const ids = incoming.map((item) => Number(item.id)).filter(Number.isFinite);
+      try {
+        await api.companionAck(ids);
+        const pending = (state.companionMessageIds || []).filter((id) => !ids.includes(Number(id)));
+        state.companionMessageIds = pending.slice(-200);
+        saveState();
+        log(`[ack] 已确认 ${ids.length} 条消息（发送=${sentAny} 静默=${silent}）`);
+      } catch (error) {
+        log(`[ack] 确认失败：${error.message}`);
       }
     }
 
@@ -633,12 +798,13 @@ async function run() {
       log('[pause] 恢复运行');
     }
 
-    const persona = await loadLivePersona();
-    const messages = buildMessages(me, persona);
+    const [persona, behavior] = await Promise.all([loadLivePersona(), loadLiveBehavior()]);
+    await loadPluginTools();
+    const messages = buildMessages(me, persona, behavior, pluginToolDocText());
     const result = await provider.callModel({
       config,
       messages,
-      tools: tools.getToolDefinitions(config),
+      tools: [...tools.getToolDefinitions(config), ...pluginToolDefs],
       toolMode
     });
 

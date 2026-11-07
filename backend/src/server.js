@@ -18,6 +18,10 @@ const docker = require('./docker');
 const tasks = require('./tasks');
 const events = require('./events');
 const inbox = require('./inbox');
+const restart = require('./restart');
+const plugins = require('./plugins');
+const pluginHost = require('./pluginHost');
+const pluginRoutes = require('./routes/plugins');
 const {
   formatInt,
   formatDate,
@@ -41,6 +45,21 @@ function statusText(status) {
 
 function statusClass(status) {
   return `status-${String(status || 'unknown').replace(/_/g, '-')}`;
+}
+
+// 在途请求计数：干净重启时先等它归零，避免把正在生成的响应直接掐断。
+let activeRequests = 0;
+function trackRequests(req, res, next) {
+  activeRequests += 1;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    activeRequests -= 1;
+  };
+  res.on('finish', release);
+  res.on('close', release);
+  next();
 }
 
 function modelsOf(provider) {
@@ -95,6 +114,7 @@ function createPanelApp() {
   const app = express();
   app.set('view engine', 'ejs');
   app.set('views', path.join(__dirname, 'views'));
+  app.use(trackRequests);
   app.use(express.urlencoded({ extended: true, limit: '100mb' }));
   app.use(express.json({ limit: '100mb' }));
   app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -152,6 +172,19 @@ function createPanelApp() {
     next();
   });
 
+  // 插件前端资源、插槽与整页替换
+  app.use(pluginHost.assetMiddleware());
+  app.use(pluginHost.middleware());
+  app.use((req, res, next) => {
+    const match = pluginHost.replacementFor(req);
+    if (!match) return next();
+    try {
+      res.type('html').send(pluginHost.renderPage(match, req, res));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // 虚拟桌面（noVNC）转发：/screen/<AI 编号>/... -> 宿主机 7900+seq 的容器内 noVNC。
   app.use((req, res, next) => {
     if (!req.path.startsWith('/screen/')) return next();
@@ -183,6 +216,9 @@ function createPanelApp() {
   });
 
   app.use('/', adminRoutes);
+  app.use('/', pluginRoutes);
+  // 插件自定义页面（/plugin/<id>/...），需放在内置路由之后
+  app.use(pluginHost.routeMiddleware());
 
   app.use((req, res) => {
     res.status(404).render('error', { title: '未找到', message: '页面不存在' });
@@ -199,6 +235,7 @@ function createPanelApp() {
 
 function createProxyApp() {
   const app = express();
+  app.use(trackRequests);
   app.use(express.json({ limit: '100mb' }));
   app.post('/v1/chat/completions', proxy.handleChat);
   app.use('/api/agent', agentApi);
@@ -230,6 +267,9 @@ async function main() {
 
   const panelApp = createPanelApp();
   const proxyApp = createProxyApp();
+
+  // 插件 worker 依赖数据库，需在 db.init 之后启动
+  plugins.init();
 
   const panelServer = panelApp.listen(config.panelPort, config.panelBind, () => {
     console.log(`[panel] http://${config.panelBind}:${config.panelPort}`);
@@ -289,13 +329,71 @@ async function main() {
     }
   }, 5000);
 
-  const shutdown = () => {
-    console.log('正在关闭...');
-    runtime.markCleanShutdown();
+  const servers = [panelServer, proxyServer];
+
+  function stopServices() {
     supervisor.stop();
     monitor.stop();
     companion.stop();
     reminders.stop();
+  }
+
+  // 停止接收新连接，并等待已有连接自然结束；超时后由调用方强制断开。
+  function closeListener(server, timeoutMs) {
+    return new Promise((resolve) => {
+      if (!server) return resolve();
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      server.close(finish);
+      if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
+      setTimeout(finish, timeoutMs).unref();
+    });
+  }
+
+  function waitForIdle(deadline) {
+    return new Promise((resolve) => {
+      const tick = () => {
+        if (activeRequests <= 0) return resolve(true);
+        if (Date.now() >= deadline) return resolve(false);
+        setTimeout(tick, 100);
+      };
+      tick();
+    });
+  }
+
+  // 干净重启：排空在途请求 -> 标记干净退出 -> 拉起新进程。
+  // 标记干净退出后，新进程不会再触发 recovery（不补偿 tokens、不重启容器）。
+  async function gracefulRestart(reason) {
+    const drainMs = Math.max(1000, Number(config.restartDrainMs) || 8000);
+    console.log(`[restart] 收到重启请求（${reason}），开始排空在途请求，上限 ${drainMs}ms`);
+    events.addEvent(null, 'system', `收到重启请求（${reason}），排空在途请求后重启。`);
+    stopServices();
+    plugins.stopAll();
+    const closing = Promise.all(servers.map((server) => closeListener(server, drainMs + 2000)));
+    const idle = await waitForIdle(Date.now() + drainMs);
+    for (const server of servers) {
+      if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+    }
+    await closing;
+    if (!idle) console.warn('[restart] 排空超时，已强制断开剩余连接');
+    runtime.markCleanShutdown();
+    db.close();
+    const childPid = restart.spawnSelf();
+    console.log(`[restart] 新进程已拉起 pid=${childPid}，当前进程退出`);
+    setTimeout(() => process.exit(0), 200);
+  }
+
+  restart.register(gracefulRestart);
+
+  const shutdown = () => {
+    console.log('正在关闭...');
+    runtime.markCleanShutdown();
+    stopServices();
+    plugins.stopAll();
     panelServer.close();
     proxyServer.close();
     db.close();

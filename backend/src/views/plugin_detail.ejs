@@ -1,0 +1,123 @@
+<%- include('partials/header') %>
+
+<h1>插件：<%= (detail.manifest && detail.manifest.name) || detail.id %></h1>
+
+<% if (message) { %>
+  <div class="notice"><%= message %></div>
+<% } %>
+<% if (error) { %>
+  <div class="notice error"><%= error %></div>
+<% } %>
+
+<div class="panel">
+  <h3>基本信息</h3>
+  <div class="kv">
+    <div class="k">ID</div><div><%= detail.id %></div>
+    <div class="k">版本</div><div><%= (detail.manifest && detail.manifest.version) || '-' %></div>
+    <div class="k">状态</div><div><%= detail.status %><%= detail.enabled ? '' : '（已禁用）' %></div>
+    <div class="k">作者</div><div><%= (detail.manifest && detail.manifest.author) || '-' %></div>
+    <div class="k">说明</div><div><%= (detail.manifest && detail.manifest.description) || '-' %></div>
+    <div class="k">来源</div><div><%= detail.record.source_type %> · <%= detail.record.source || '-' %></div>
+    <div class="k">安装时间</div><div><%= fmtDate(detail.record.installed_at) %></div>
+    <div class="k">更新时间</div><div><%= fmtDate(detail.record.updated_at) %></div>
+    <div class="k">占用空间</div><div><%= fmtBytes(detail.disk_bytes) %></div>
+    <div class="k">最近错误</div><div><%= detail.record.last_error || '-' %></div>
+  </div>
+  <p style="margin-top:12px">
+    <% if (detail.enabled) { %>
+      <form method="post" action="/plugins/<%= detail.id %>/disable" style="display:inline">
+        <button type="submit" class="light">禁用</button>
+      </form>
+    <% } else { %>
+      <form method="post" action="/plugins/<%= detail.id %>/enable" style="display:inline">
+        <button type="submit">启用</button>
+      </form>
+    <% } %>
+    <a class="btn light" href="/setup">去重启后端</a>
+    <a class="btn light" href="/logs?tab=plugin&plugin=<%= detail.id %>">查看完整日志</a>
+  </p>
+</div>
+
+<div class="panel">
+  <h3>更新</h3>
+  <p class="muted small">更新只替换代码，插件数据（<code>data/plugin-data/<%= detail.id %></code>）保留；新版本加载失败会自动回滚到上一份代码。</p>
+  <form method="post" action="/plugins/<%= detail.id %>/update" enctype="multipart/form-data">
+    <label>上传新压缩包</label>
+    <input type="file" name="package" accept=".zip">
+    <% if (detail.record.source_type === 'git') { %>
+      <label>或按 git 重新拉取（分支，留空用安装时的引用）</label>
+      <input type="text" name="git_branch" placeholder="main">
+    <% } %>
+    <button type="submit">更新</button>
+  </form>
+</div>
+
+<% if (configSchema.length) { %>
+<div class="panel">
+  <h3>插件设置</h3>
+  <form method="post" action="/plugins/<%= detail.id %>/config">
+    <% configSchema.forEach(function (field) {
+         var key = field.key;
+         var value = (config[key] !== undefined) ? config[key] : field.default;
+    %>
+      <label><%= field.label || key %></label>
+      <% if (field.type === 'textarea') { %>
+        <textarea name="<%= key %>" rows="4"><%= value == null ? '' : value %></textarea>
+      <% } else if (field.type === 'checkbox') { %>
+        <label class="check"><input type="checkbox" name="<%= key %>" value="1" <%= value ? 'checked' : '' %>> 启用</label>
+      <% } else if (field.type === 'select') { %>
+        <select name="<%= key %>">
+          <% (field.options || []).forEach(function (option) {
+               var opt = (typeof option === 'string') ? { value: option, label: option } : option;
+          %>
+            <option value="<%= opt.value %>" <%= String(value) === String(opt.value) ? 'selected' : '' %>><%= opt.label || opt.value %></option>
+          <% }); %>
+        </select>
+      <% } else { %>
+        <input type="<%= field.type === 'number' ? 'number' : 'text' %>" name="<%= key %>" value="<%= value == null ? '' : value %>">
+      <% } %>
+      <% if (field.help) { %><p class="muted small"><%= field.help %></p><% } %>
+    <% }); %>
+    <button type="submit">保存配置</button>
+  </form>
+</div>
+<% } %>
+
+<div class="panel">
+  <h3>清单</h3>
+  <pre data-collapse><%= JSON.stringify(detail.manifest || {}, null, 2) %></pre>
+</div>
+
+<div class="panel">
+  <h3>最近日志</h3>
+  <% if (!log.length) { %>
+    <p class="muted">暂无日志。插件启动后才会写入。</p>
+  <% } else { %>
+    <pre data-collapse><%= log.join('\n') %></pre>
+  <% } %>
+</div>
+
+<div class="panel">
+  <h3>数据与卸载</h3>
+  <form method="post" action="/plugins/<%= detail.id %>/clear-data" style="display:inline" onsubmit="return confirm('清除插件数据后不可恢复，确定继续？')">
+    <button type="submit" class="light">清除插件数据</button>
+  </form>
+  <form method="post" action="/plugins/<%= detail.id %>/uninstall" style="display:inline" onsubmit="return confirm('确定卸载该插件？')">
+    <label class="check" style="display:inline-block;margin-left:12px">
+      <input type="checkbox" name="delete_data" value="1"> 同时删除数据
+    </label>
+    <button type="submit" class="light">卸载</button>
+  </form>
+  <p class="muted small">清除数据会删除插件自己的 SQLite 库与日志；卸载默认保留数据，勾选后一并删除。</p>
+</div>
+
+<p class="muted small" style="margin-top:18px">
+  权限声明（仅供识别，平台不做强制拦截）：
+  <%= detail.manifest && Array.isArray(detail.manifest.permissions) && detail.manifest.permissions.length
+    ? detail.manifest.permissions.join('、')
+    : '未声明' %>
+  　·　接口版本 <%= (detail.manifest && detail.manifest.api_version) || 1 %>
+  <%= detail.manifest && detail.manifest.min_platform_version ? '· 最低平台 ' + detail.manifest.min_platform_version : '' %>
+</p>
+
+<%- include('partials/footer') %>

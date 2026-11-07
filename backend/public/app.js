@@ -223,6 +223,7 @@
 
     var mode = view.getAttribute('data-mode') || 'server';
     var agent = view.getAttribute('data-agent') || 'all';
+    var plugin = view.getAttribute('data-plugin') || '';
     var levelSelect = document.getElementById('log-level');
     var keywordInput = document.getElementById('log-keyword');
     var pauseButton = document.getElementById('log-pause');
@@ -290,7 +291,9 @@
       if (source) source.close();
       var url = mode === 'ai'
         ? '/logs/ai/stream?agent=' + encodeURIComponent(agent)
-        : '/logs/server/stream';
+        : (mode === 'plugin'
+          ? '/logs/plugin/stream?plugin=' + encodeURIComponent(plugin)
+          : '/logs/server/stream');
       source = new EventSource(url);
       source.onopen = function () {
         if (openedOnce) {
@@ -335,6 +338,12 @@
     if (agentSelect) {
       agentSelect.addEventListener('change', function () {
         window.location.href = '/logs?tab=ai&agent=' + encodeURIComponent(agentSelect.value);
+      });
+    }
+    var pluginSelect = document.getElementById('log-plugin');
+    if (pluginSelect) {
+      pluginSelect.addEventListener('change', function () {
+        window.location.href = '/logs?tab=plugin&plugin=' + encodeURIComponent(pluginSelect.value);
       });
     }
 

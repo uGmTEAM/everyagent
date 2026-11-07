@@ -306,15 +306,15 @@ const PERSONA_SECTIONS = [
 ];
 
 function composePersona(mode, singleText, sections) {
-  const single = String(singleText || '').trim().slice(0, 4000);
+  const single = String(singleText || '').trim().slice(0, 8000);
   if (mode !== 'full') return { text: single, mode: 'single' };
   const parts = [];
   for (const [key, title] of PERSONA_SECTIONS) {
-    const value = String((sections && sections[key]) || '').trim().slice(0, 2000);
+    const value = String((sections && sections[key]) || '').trim().slice(0, 4000);
     if (!value) continue;
     parts.push(`## ${title}\n${value}`);
   }
-  const text = parts.join('\n\n').slice(0, 8000);
+  const text = parts.join('\n\n').slice(0, 16000);
   return { text, mode: text ? 'full' : 'single' };
 }
 
@@ -337,6 +337,8 @@ async function createAgent({
   visionBill = false,
   manualTasks = false,
   mode: runMode = 'research',
+  cpuCores = null,
+  memoryMb = null,
   toolkits: toolkitNames = [],
   uploadNote = '',
   corpusFiles = []
@@ -431,14 +433,21 @@ async function createAgent({
   const id = `AI-${String(seq).padStart(3, '0')}`;
   const apiKey = randomKey();
   const createdAt = nowIso();
+  // 容器资源按 AI 单独设置；未指定时回退到全局默认（2 核 / 4GB）。
+  const cleanCpu = Number.isFinite(Number(cpuCores)) && Number(cpuCores) > 0
+    ? Math.min(16, Math.max(0.5, Number(cpuCores)))
+    : Number(config.agentCpuCores) || 2;
+  const cleanMemory = Number.isFinite(Number(memoryMb)) && Number(memoryMb) >= 512
+    ? Math.min(32768, Math.round(Number(memoryMb)))
+    : Math.round(config.agentMemoryBytes / (1024 * 1024));
 
   db.run(
     `INSERT INTO agents
       (id, seq, goal, rules, provider_id, model, model_type, initial_balance, balance, status, api_key,
        allow_internet, unlimited_tokens, enable_screen, vision_mode, vision_provider_id, vision_model,
        vision_bill, extra_rules, manual_tasks, persona, persona_mode, prompt_mode, toolkits, mode,
-       crash_max_retries, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       humanize, crash_max_retries, cpu_cores, memory_mb, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       seq,
@@ -464,7 +473,10 @@ async function createAgent({
       promptMode,
       JSON.stringify(toolkitSnapshot),
       cleanRunMode,
+      isCompanion && config.humanizeDefault ? 1 : 0,
       crashMax,
+      cleanCpu,
+      cleanMemory,
       createdAt
     ]
   );
@@ -488,7 +500,9 @@ async function createAgent({
     visionMode: mode,
     manualTasks: effectiveManual,
     toolkits: toolkitSnapshot.map((item) => item.name),
-    extraRules: Boolean(cleanExtraRules)
+    extraRules: Boolean(cleanExtraRules),
+    cpuCores: cleanCpu,
+    memoryMb: cleanMemory
   });
 
   let result = getAgent(id);

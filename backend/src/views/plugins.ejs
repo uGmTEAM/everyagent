@@ -1,0 +1,120 @@
+<%- include('partials/header') %>
+
+<h1>插件</h1>
+
+<% if (message) { %>
+  <div class="notice"><%= message %></div>
+<% } %>
+<% if (error) { %>
+  <div class="notice error"><%= error %></div>
+<% } %>
+
+<div id="plugin-disclaimer" class="panel" style="display:none">
+  <h3>插件免责声明</h3>
+  <p class="small">
+    插件由第三方开发，<strong>未经平台安全审核</strong>，运行时拥有与平台后端相同的权限，可能读取你的数据、访问网络或修改平台行为。
+    请只安装来源可信的插件；因插件造成的数据丢失或安全问题由安装者自行承担。
+  </p>
+  <p class="small muted">建议：安装前先查看插件代码；不确定用途时先禁用，观察日志再启用。</p>
+  <p>
+    <button type="button" id="plugin-disclaimer-ok">我已了解</button>
+    <button type="button" id="plugin-disclaimer-never" class="light">不再提示</button>
+  </p>
+</div>
+
+<div class="panel">
+  <h3>安装插件</h3>
+  <p class="muted small">支持上传 zip（内含 <code>manifest.json</code>）或从 git 仓库拉取。安装后需要点「重启后端」才会生效；更新会保留插件数据，旧版本代码保留一份用于回滚。</p>
+  <form method="post" action="/plugins/install" enctype="multipart/form-data">
+    <label>压缩包</label>
+    <input type="file" name="package" accept=".zip">
+    <label>或 git 地址</label>
+    <input type="text" name="git_url" placeholder="https://github.com/you/everyagent-plugin">
+    <label>分支</label>
+    <input type="text" name="git_branch" value="main">
+    <button type="submit">安装</button>
+  </form>
+</div>
+
+<div class="panel">
+  <h3>已安装</h3>
+  <% if (!list.length) { %>
+    <p class="muted">还没有安装插件。安装后重启后端即可生效。</p>
+  <% } else { %>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>插件</th><th>版本</th><th>状态</th><th>生效范围</th><th>最近错误</th><th>作者</th><th>来源</th><th>安装时间</th><th>占用</th><th>操作</th></tr>
+      </thead>
+      <tbody>
+        <% list.forEach(function (p) { %>
+        <%
+          var statusText = p.status === 'running' ? '运行中'
+            : p.status === 'ui_only' ? '仅界面'
+            : p.status === 'disabled' ? '已禁用'
+            : p.status === 'crashed' ? '已禁用（异常）'
+            : p.status === 'error' ? '错误'
+            : p.status === 'stopped' ? (p.enabled ? '待重启生效' : '已停止')
+            : p.status;
+          var scope = (p.manifest && Array.isArray(p.manifest.pages) && p.manifest.pages.length)
+            ? p.manifest.pages.join(', ')
+            : '全部页面';
+        %>
+        <tr>
+          <td><a href="/plugins/<%= p.id %>"><%= (p.manifest && p.manifest.name) || p.id %></a><div class="muted small"><%= p.id %></div></td>
+          <td><%= (p.manifest && p.manifest.version) || '-' %></td>
+          <td><%= statusText %></td>
+          <td class="small"><%= scope %></td>
+          <td class="small"><%= p.record && p.record.last_error ? p.record.last_error.slice(0, 60) : '-' %></td>
+          <td class="small"><%= (p.manifest && p.manifest.author) || '-' %></td>
+          <td class="small"><%= p.record ? p.record.source_type : '-' %></td>
+          <td class="small"><%= p.record ? fmtDate(p.record.installed_at) : '-' %></td>
+          <td class="small"><%= fmtBytes(p.disk_bytes) %></td>
+          <td>
+            <% if (p.enabled) { %>
+              <form method="post" action="/plugins/<%= p.id %>/disable" style="display:inline">
+                <button type="submit" class="light tiny">禁用</button>
+              </form>
+            <% } else { %>
+              <form method="post" action="/plugins/<%= p.id %>/enable" style="display:inline">
+                <button type="submit" class="light tiny">启用</button>
+              </form>
+            <% } %>
+            <a class="btn light tiny" href="/plugins/<%= p.id %>">详情</a>
+          </td>
+        </tr>
+        <% }); %>
+      </tbody>
+    </table>
+  </div>
+  <% } %>
+</div>
+
+<p class="muted small">
+  状态说明：运行中 = worker 已启动；仅界面 = 没有 worker 入口；待重启生效 = 已启用但当前进程未加载。
+  插件异常会自动禁用并写入平台「信息」，修复后需要手动启用并重启后端。
+</p>
+
+<script>
+(function () {
+  var KEY = 'ea_plugin_disclaimer_v1';
+  var box = document.getElementById('plugin-disclaimer');
+  var notes = {
+    ok: document.getElementById('plugin-disclaimer-ok'),
+    never: document.getElementById('plugin-disclaimer-never')
+  };
+  function hide() { box.style.display = 'none'; }
+  try {
+    if (window.localStorage && localStorage.getItem(KEY) !== '1') box.style.display = '';
+  } catch (error) {
+    box.style.display = '';
+  }
+  notes.ok.addEventListener('click', hide);
+  notes.never.addEventListener('click', function () {
+    try { localStorage.setItem(KEY, '1'); } catch (error) { /* ignore */ }
+    hide();
+  });
+})();
+</script>
+
+<%- include('partials/footer') %>

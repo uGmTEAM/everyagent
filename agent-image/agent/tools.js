@@ -655,6 +655,58 @@ const COMPANION_TOOL_DEFINITIONS = [
         }
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'humanize_get',
+      description: '查看当前拟人化设置（主开关、各子项与延迟参数）。',
+      parameters: { type: 'object', properties: {} }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'humanize_set',
+      description:
+        '修改拟人化设置。开启后 QQ 出站消息按换行分段逐条发送，段尾单个句号会被去掉，并按字数排队延迟；' +
+        '平台通知与邮箱消息不受影响。各子项可单独开关。',
+      parameters: {
+        type: 'object',
+        properties: {
+          enabled: { type: 'boolean', description: '主开关' },
+          style: { type: 'boolean', description: '口语化，不用列表与 Markdown' },
+          fillers: { type: 'boolean', description: '句末偶尔带语气词' },
+          brief: { type: 'boolean', description: '偶尔只回很短一句' },
+          selfCorrect: { type: 'boolean', description: '偶尔补一句更正' },
+          routine: { type: 'boolean', description: '作息感并记住对方的称呼' },
+          quietNight: { type: 'boolean', description: '深夜只回短句' },
+          readingDelay: { type: 'boolean', description: '先等一会儿再回（看手机延迟）' },
+          merge: { type: 'boolean', description: '对方连发多条时读完再一起回' },
+          followUp: { type: 'boolean', description: '对方久不回时主动补一句' },
+          followUpMinutes: { type: 'number', description: '补话等待分钟数，默认 20' },
+          catchphrases: { type: 'array', items: { type: 'string' }, description: '口头禅库，最多 20 条' },
+          catchphraseChance: { type: 'number', description: '口头禅出现概率，0-1' },
+          delayPerCharMs: { type: 'number', description: '每字延迟毫秒' },
+          delayMaxMs: { type: 'number', description: '单段延迟上限毫秒' }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'qq_silent',
+      description:
+        '看过这批消息后决定不回复时调用。调用后平台不会再把纯文本自动补发到会话，这批消息记为已处理；' +
+        '既不调用 qq_send 也不调用它，平台会把这批消息重新投给你。',
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string', description: '不回复的原因，例如「群里只是旁听」「对方只是感叹」' }
+        }
+      }
+    }
   }
 ];
 
@@ -1189,6 +1241,29 @@ async function executeTool({ tool, args = {}, config, state, saveState }) {
 
     case 'keyword_list':
       return api.companionKeywords(safeArgs.conversation_id ? String(safeArgs.conversation_id) : '');
+
+    case 'humanize_get':
+      return api.behaviorInfo();
+
+    case 'humanize_set': {
+      const payload = {};
+      const boolKeys = [
+        'enabled', 'style', 'fillers', 'brief', 'selfCorrect',
+        'routine', 'quietNight', 'readingDelay', 'merge', 'followUp'
+      ];
+      for (const key of boolKeys) {
+        if (safeArgs[key] !== undefined) payload[key] = Boolean(safeArgs[key]);
+      }
+      for (const key of ['followUpMinutes', 'catchphraseChance', 'delayPerCharMs', 'delayMaxMs']) {
+        if (safeArgs[key] !== undefined) payload[key] = Number(safeArgs[key]);
+      }
+      if (safeArgs.catchphrases !== undefined) payload.catchphrases = safeArgs.catchphrases;
+      return api.humanizeSet(payload);
+    }
+
+    // 只是给主循环一个明确信号：本批消息不回复，不要自动补发纯文本
+    case 'qq_silent':
+      return { ok: true, silent: true, reason: String(safeArgs.reason || '').slice(0, 200) };
 
     case 'reminder_create': {
       const message = String(safeArgs.message || '').trim();

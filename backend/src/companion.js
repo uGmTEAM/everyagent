@@ -2,6 +2,7 @@ const db = require('./db');
 const config = require('./config');
 const docker = require('./docker');
 const agents = require('./agents');
+const plugins = require('./plugins');
 const { addEvent, notifyAgent } = require('./events');
 const { nowIso, truncate } = require('./util');
 
@@ -255,9 +256,220 @@ function removeKeyword(agentId, { word, conversationId = '' }) {
   return { removed: Number(result.changes || 0), keywords: listKeywords(agentId, conversationId || null) };
 }
 
+// ---------- 拟人化：开关、分段、发送延迟队列 ----------
+const DEFAULT_HUMANIZE = {
+  style: true,            // B 口语化提示词（禁列表/Markdown）
+  fillers: true,          // C 语气词
+  selfCorrect: true,      // E 偶尔补一句/自我更正
+  routine: true,          // F 作息感 + 记住称呼
+  brief: true,            // G 偶发短句
+  readingDelay: true,     // H1 看手机延迟
+  merge: true,            // H2 连发多条合并后再回
+  catchphrases: [],       // H3 口头禅库
+  catchphraseChance: 0.08,
+  followUp: false,        // H4 对方久不回再补一句（默认关）
+  followUpMinutes: 20,
+  quietNight: true,       // H6 深夜少话
+  delayBaseMs: 500,
+  delayPerCharMs: 50,
+  delayMaxMs: 5000,
+  dayMinMs: 3000,
+  dayMaxMs: 20000,
+  nightMinMs: 30000,
+  nightMaxMs: 90000,
+  nightStart: 23,
+  nightEnd: 8,
+  mergeQuietMs: 2500
+};
+
+function humanizeConfig(agent = {}) {
+  let stored = {};
+  try {
+    stored = JSON.parse(agent.humanize_config || '{}') || {};
+  } catch {
+    stored = {};
+  }
+  const cfg = { ...DEFAULT_HUMANIZE, ...stored };
+  cfg.catchphrases = Array.isArray(cfg.catchphrases)
+    ? cfg.catchphrases.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 20)
+    : [];
+  cfg.enabled = Boolean(Number(agent.humanize));
+  return cfg;
+}
+
+// 修改拟人化配置（面板与 AI 工具共用）：只接受白名单字段，其余忽略
+function setHumanize(agentId, patch = {}) {
+  const agent = db.get('SELECT id, humanize, humanize_config FROM agents WHERE id = ?', [agentId]);
+  if (!agent) throw new Error('AI 不存在');
+  const cfg = humanizeConfig(agent);
+  if (patch.enabled !== undefined) cfg.enabled = Boolean(patch.enabled);
+  for (const key of ['style', 'fillers', 'selfCorrect', 'routine', 'brief', 'readingDelay', 'merge', 'followUp', 'quietNight']) {
+    if (patch[key] !== undefined) cfg[key] = Boolean(patch[key]);
+  }
+  if (patch.catchphrases !== undefined) {
+    const list = Array.isArray(patch.catchphrases)
+      ? patch.catchphrases
+      : String(patch.catchphrases).split(/[,，、\n]/);
+    cfg.catchphrases = list.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 20);
+  }
+  const numeric = {
+    catchphraseChance: [0, 1],
+    delayBaseMs: [0, 60000],
+    delayPerCharMs: [0, 2000],
+    delayMaxMs: [0, 120000],
+    dayMinMs: [0, 300000],
+    dayMaxMs: [0, 300000],
+    nightMinMs: [0, 600000],
+    nightMaxMs: [0, 600000],
+    followUpMinutes: [1, 1440],
+    nightStart: [0, 23],
+    nightEnd: [0, 23],
+    mergeQuietMs: [0, 60000]
+  };
+  for (const [key, [min, max]] of Object.entries(numeric)) {
+    if (patch[key] === undefined) continue;
+    const value = Number(patch[key]);
+    if (Number.isFinite(value)) cfg[key] = Math.max(min, Math.min(max, value));
+  }
+  if (cfg.dayMinMs > cfg.dayMaxMs) cfg.dayMaxMs = cfg.dayMinMs;
+  if (cfg.nightMinMs > cfg.nightMaxMs) cfg.nightMaxMs = cfg.nightMinMs;
+  const { enabled, ...rest } = cfg;
+  db.run('UPDATE agents SET humanize = ?, humanize_config = ? WHERE id = ?', [
+    enabled ? 1 : 0,
+    JSON.stringify(rest),
+    agentId
+  ]);
+  return cfg;
+}
+
+function isNight(cfg, date = new Date()) {
+  const hour = date.getHours();
+  const start = Number(cfg.nightStart);
+  const end = Number(cfg.nightEnd);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start === end) return false;
+  return start > end ? hour >= start || hour < end : hour >= start && hour < end;
+}
+
+// 只去掉段尾单个「。」；「。。」及以上（省略号写法）保留
+function stripEndPeriod(line) {
+  const text = String(line || '').trim();
+  if (!text.endsWith('。')) return text;
+  if (text.endsWith('。。')) return text;
+  return text.slice(0, -1).trim();
+}
+
+// 按换行分段，不设上限；可选追加一条口头禅作为单独一段
+function humanizeSegments(text, cfg = DEFAULT_HUMANIZE) {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const segments = lines.map(stripEndPeriod).filter(Boolean);
+  const words = Array.isArray(cfg.catchphrases) ? cfg.catchphrases : [];
+  if (words.length && Math.random() < Number(cfg.catchphraseChance || 0)) {
+    segments.push(words[Math.floor(Math.random() * words.length)]);
+  }
+  if (!segments.length) {
+    const fallback = stripEndPeriod(text);
+    return fallback ? [fallback] : [];
+  }
+  return segments;
+}
+
+function segmentDelayMs(segment, cfg) {
+  const len = Array.from(String(segment || '')).length;
+  const raw = Number(cfg.delayBaseMs || 0) + len * Number(cfg.delayPerCharMs || 0);
+  const max = Number(cfg.delayMaxMs || 0);
+  return max > 0 ? Math.min(raw, max) : raw;
+}
+
+function readingDelayMs(cfg) {
+  if (!cfg.readingDelay) return 0;
+  const night = isNight(cfg);
+  const min = Number(night ? cfg.nightMinMs : cfg.dayMinMs) || 0;
+  const max = Math.max(min, Number(night ? cfg.nightMaxMs : cfg.dayMaxMs) || 0);
+  return min + Math.random() * (max - min);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
+// 同一 AI 的出站消息串行排队，避免多条回复交叉发送
+const outboundQueues = new Map();
+
+function enqueueOutbound(agentId, task) {
+  const previous = outboundQueues.get(agentId) || Promise.resolve();
+  const next = previous.then(task, task).catch((error) => {
+    addEvent(agentId, 'companion_send_error', `拟人化分段发送失败：${error.message}`);
+  });
+  outboundQueues.set(agentId, next);
+  return next;
+}
+
+async function postSegments(agent, { conversationId, kind = 'private', content, segments }) {
+  const payload = {
+    target: { type: kind === 'group' ? 'group' : 'private', id: String(conversationId) },
+    segments
+  };
+  const result = await bridgeFetch(agent, '/v1/messages', {
+    method: 'POST',
+    body: payload,
+    timeoutMs: 30000
+  });
+  recordOutbound(agent, {
+    bridgeMsgId: result?.message_id || null,
+    conversationId,
+    kind,
+    content,
+    segments
+  });
+  return result;
+}
+
+// 对方久不回再补一句：只提醒 AI 一次，内容由 AI 自己写，且有冷却与记录
+function maybeFollowUp(agent) {
+  const cfg = humanizeConfig(agent);
+  if (!cfg.enabled || !cfg.followUp) return;
+  if (cfg.quietNight && isNight(cfg)) return;
+  const minutes = Math.max(1, Number(cfg.followUpMinutes) || 20);
+  const since = new Date(Date.now() - minutes * 60 * 1000).toISOString();
+  const rows = db.all(
+    `SELECT conversation_id, MAX(id) AS last_id, MAX(created_at) AS last_at
+       FROM companion_messages
+      WHERE agent_id = ? AND conversation_id <> '__reminder__'
+      GROUP BY conversation_id`,
+    [agent.id]
+  );
+  for (const row of rows) {
+    if (!row.last_id || String(row.last_at || '') >= since) continue;
+    const last = db.get('SELECT id, direction FROM companion_messages WHERE id = ?', [row.last_id]);
+    if (!last || last.direction !== 'out') continue;
+    const seen = db.get(
+      'SELECT id FROM companion_followups WHERE agent_id = ? AND conversation_id = ? AND covered_message_id = ?',
+      [agent.id, row.conversation_id, last.id]
+    );
+    if (seen) continue;
+    db.run(
+      'INSERT OR IGNORE INTO companion_followups (agent_id, conversation_id, covered_message_id, created_at) VALUES (?, ?, ?, ?)',
+      [agent.id, row.conversation_id, last.id, nowIso()]
+    );
+    addEvent(agent.id, 'humanize_followup', `会话 ${row.conversation_id} 已 ${minutes} 分钟没有新消息，提醒 AI 补一句。`, {
+      conversation_id: row.conversation_id
+    });
+    notifyAgent(agent.id, `[拟人化] 会话 ${row.conversation_id} 已经 ${minutes} 分钟没有新消息了。可以主动补一句自然的话（本轮最多一次，对方还不回就不要再催）。`);
+  }
+}
+
 function insertInbound(agent, message, selfUin) {
   const bridgeId = String(message.id || '');
   if (!bridgeId) return null;
+  // 自身消息兜底：桥在登录早期 selfInfo 可能还没就绪，这里按发送人再比对一次，避免把自己的发言当成对方消息
+  const senderUin = String(message?.sender?.uin || '');
+  const selfId = String(selfUin || '');
+  if (message?.self === true || (selfId && senderUin === selfId)) {
+    return null;
+  }
   const existing = db.get(
     'SELECT id FROM companion_messages WHERE agent_id = ? AND bridge_msg_id = ?',
     [agent.id, bridgeId]
@@ -348,25 +560,36 @@ function recordOutbound(agent, { bridgeMsgId = null, conversationId, kind = 'pri
 async function sendText(agent, { conversationId, kind = 'private', text, replyTo = null, senderUin = null, senderName = null }) {
   const content = String(text || '').trim();
   if (!content) throw new Error('消息内容不能为空');
-  const targetType = kind === 'group' ? 'group' : 'private';
-  const payload = {
-    target: { type: targetType, id: String(conversationId) },
-    segments: buildSegments({ kind, text: content, replyTo, senderUin, senderName })
-  };
-  const result = await bridgeFetch(agent, '/v1/messages', {
-    method: 'POST',
-    body: payload,
-    timeoutMs: 30000
+  const cfg = humanizeConfig(agent);
+  if (!cfg.enabled) {
+    return postSegments(agent, {
+      conversationId,
+      kind,
+      content,
+      segments: buildSegments({ kind, text: content, replyTo, senderUin, senderName })
+    });
+  }
+  // 拟人化：按换行分段逐条发送，先“看手机”延迟，再按字数排队发送
+  const segments = humanizeSegments(content, cfg);
+  if (!segments.length) throw new Error('消息内容不能为空');
+  enqueueOutbound(agent.id, async () => {
+    const readDelay = readingDelayMs(cfg);
+    if (readDelay > 0) await sleep(readDelay);
+    for (let index = 0; index < segments.length; index += 1) {
+      const segment = segments[index];
+      const delay = segmentDelayMs(segment, cfg);
+      if (delay > 0) await sleep(delay);
+      const segs = buildSegments({
+        kind,
+        text: segment,
+        replyTo: index === 0 ? replyTo : null,
+        senderUin: index === 0 ? senderUin : null,
+        senderName
+      });
+      await postSegments(agent, { conversationId, kind, content: segment, segments: segs });
+    }
   });
-
-  recordOutbound(agent, {
-    bridgeMsgId: result?.message_id || null,
-    conversationId,
-    kind,
-    content,
-    segments: payload.segments
-  });
-  return result;
+  return { queued: true, segments: segments.length };
 }
 
 async function sendMedia(agent, { conversationId, kind = 'private', type = 'image', path = '', base64 = '', url = '', name = '', replyTo = null }) {
@@ -503,6 +726,16 @@ async function pollAgent(agent, { allowDocker = true } = {}) {
 
   const messages = Array.isArray(data?.messages) ? data.messages : [];
   for (const message of messages) {
+    // 插件可改写/丢弃入站消息（inbound.transform）；失败时按原消息处理
+    try {
+      const transformed = await plugins.runHook('inbound.transform', {
+        agent: { id: agent.id, seq: agent.seq, mode: agent.mode },
+        message
+      });
+      if (transformed?.message) Object.assign(message, transformed.message);
+    } catch {
+      // 插件异常不影响收消息
+    }
     const inserted = insertInbound(agent, message, uin);
     if (inserted) {
       addEvent(agent.id, 'companion_in', `收到 ${message.chat_type === 'group' ? '群' : '私聊'}消息。`, {
@@ -583,6 +816,7 @@ async function tick() {
       await pollAgent(agent, { allowDocker: dockerOk }).catch((error) => {
         addEvent(agent.id, 'companion_error', `陪伴轮询失败：${error.message}`);
       });
+      maybeFollowUp(agent);
     }
   } catch (error) {
     console.error('[companion] tick 失败', error.message);
@@ -604,6 +838,88 @@ function start() {
 function stop() {
   if (timer) clearInterval(timer);
   timer = null;
+}
+
+// 联系人昵称缓存：桥在私聊消息里拿不到昵称（sender_name 为空），用好友列表补齐
+const contactSyncAt = new Map();
+const CONTACT_SYNC_TTL_MS = 30 * 60 * 1000;
+
+function contactNames(agentId, accountIds = []) {
+  const ids = accountIds.map((id) => String(id || '').trim()).filter(Boolean);
+  if (!ids.length) return new Map();
+  const rows = db.all(
+    `SELECT account_id, name FROM companion_contacts
+      WHERE agent_id = ? AND account_id IN (${ids.map(() => '?').join(',')})`,
+    [agentId, ...ids]
+  );
+  const map = new Map();
+  for (const row of rows) {
+    if (row.name) map.set(String(row.account_id), row.name);
+  }
+  return map;
+}
+
+function saveContacts(agentId, entries = []) {
+  const stamp = nowIso();
+  for (const entry of entries) {
+    const accountId = String(entry.account_id || '').trim();
+    const name = String(entry.name || '').trim();
+    if (!accountId || !name) continue;
+    db.run(
+      `INSERT INTO companion_contacts (agent_id, account_id, name, source, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(agent_id, account_id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at`,
+      [agentId, accountId, truncate(name, 200), entry.source || 'friend', stamp]
+    );
+  }
+}
+
+// 从桥的好友列表拉一次昵称并缓存；30 分钟节流，失败静默（不影响收消息）
+async function syncContacts(agent) {
+  const agentId = agent.id;
+  const last = Number(contactSyncAt.get(agentId) || 0);
+  if (Date.now() - last < CONTACT_SYNC_TTL_MS) return false;
+  contactSyncAt.set(agentId, Date.now());
+  try {
+    const data = await bridgeFetch(agent, '/v1/friends', { timeoutMs: 30000 });
+    const friends = Array.isArray(data?.friends) ? data.friends : [];
+    const entries = [];
+    for (const friend of friends) {
+      const name = String(friend.name || friend.remark || '').trim();
+      if (!name) continue;
+      if (friend.uin) entries.push({ account_id: String(friend.uin), name, source: 'friend' });
+      if (friend.uid) entries.push({ account_id: String(friend.uid), name, source: 'friend' });
+    }
+    saveContacts(agentId, entries);
+    return entries.length > 0;
+  } catch {
+    // 桥未就绪或好友列表不可用时跳过，下次再补
+    return false;
+  }
+}
+
+// 给 inbox / 历史上下文补发送人昵称；sender_name 已有值时不动
+async function enrichSenders(agent, rows = []) {
+  const missing = [];
+  for (const row of rows) {
+    if (String(row.direction || 'in') !== 'in') continue;
+    if (String(row.sender_name || '').trim()) continue;
+    if (row.sender_uin) missing.push(String(row.sender_uin));
+  }
+  if (!missing.length) return rows;
+  let names = contactNames(agent.id, missing);
+  if (!names.size) {
+    await syncContacts(agent);
+    names = contactNames(agent.id, missing);
+  }
+  for (const row of rows) {
+    if (String(row.direction || 'in') !== 'in') continue;
+    const key = String(row.sender_uin || '');
+    if (!String(row.sender_name || '').trim() && names.has(key)) {
+      row.sender_name = names.get(key);
+    }
+  }
+  return rows;
 }
 
 function recentConversations(agentId, limit = 30) {
@@ -631,20 +947,65 @@ function conversationMessages(agentId, conversationId, limit = 200) {
   ).reverse();
 }
 
+// 同一条消息在 5 秒内不会被重复返回，避免容器忙轮询时把同一批消息来回抛
+const FETCH_COOLDOWN_MS = 5000;
+// 最多重投 3 次：回合失败不 ack 时靠重投兜底，超过上限就停手，避免死循环刷模型
+const MAX_FETCH_TIMES = 3;
+
 function pendingForAgent(agentId, limit = 10) {
-  return db.all(
+  const rows = db.all(
     `SELECT * FROM companion_messages
       WHERE agent_id = ? AND direction = 'in' AND needs_reply = 1 AND delivered_at IS NULL
+        AND COALESCE(fetch_count, 0) < ${MAX_FETCH_TIMES}
       ORDER BY id ASC LIMIT ?`,
     [agentId, limit]
   );
+  const now = Date.now();
+  const ready = rows.filter((row) => {
+    const fetchedAt = row.last_fetched_at ? Date.parse(row.last_fetched_at) : 0;
+    return !fetchedAt || now - fetchedAt >= FETCH_COOLDOWN_MS;
+  });
+  const agent = db.get('SELECT id, humanize, humanize_config FROM agents WHERE id = ?', [agentId]);
+  const cfg = humanizeConfig(agent || {});
+  // H2：对方连发多条时先攒一会儿再交给 AI，像真人读完再回
+  if (cfg.enabled && cfg.merge) {
+    const quiet = Math.max(0, Number(cfg.mergeQuietMs) || 0);
+    if (quiet > 0) {
+      const cutoff = Date.now() - quiet;
+      return ready.filter((row) => {
+        const at = Date.parse(row.created_at);
+        return Number.isNaN(at) || at <= cutoff;
+      });
+    }
+  }
+  return ready;
 }
 
-function markDelivered(ids = []) {
+// 拉取只记次数与时间，不算送达；容器回合结束后由 /companion/ack 显式确认
+function markFetched(ids = []) {
   const stamp = nowIso();
   for (const id of ids) {
-    db.run('UPDATE companion_messages SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL', [stamp, id]);
+    db.run(
+      `UPDATE companion_messages
+          SET fetch_count = COALESCE(fetch_count, 0) + 1, last_fetched_at = ?
+        WHERE id = ? AND delivered_at IS NULL`,
+      [stamp, id]
+    );
   }
+}
+
+// 只允许 AI 确认自己的消息，避免跨 AI 误标送达
+function ackMessages(agentId, ids = []) {
+  const stamp = nowIso();
+  let acked = 0;
+  for (const id of ids) {
+    const result = db.run(
+      'UPDATE companion_messages SET delivered_at = ? WHERE agent_id = ? AND id = ? AND delivered_at IS NULL',
+      [stamp, agentId, id]
+    );
+    acked += Number(result?.changes || 0);
+  }
+  return acked;
 }
 
 function contextFor(agentId, conversationId, beforeId, limit = 8) {
@@ -749,7 +1110,12 @@ module.exports = {
   recentConversations,
   conversationMessages,
   pendingForAgent,
-  markDelivered,
+  markFetched,
+  ackMessages,
+  enrichSenders,
+  saveContacts,
+  contactNames,
+  syncContacts,
   contextFor,
   stats,
   qrcode,
@@ -763,6 +1129,9 @@ module.exports = {
   detectManagerKind,
   managerKey,
   matchKeyword,
+  humanizeConfig,
+  setHumanize,
+  humanizeSegments,
   listKeywords,
   addKeyword,
   removeKeyword,

@@ -34,6 +34,8 @@ const config = {
   companionMaxGroupReplyChars: Number(process.env.EA_COMPANION_GROUP_MAX || 600),
   // 命中词触发节流：同一群 N 分钟内最多触发一次；0 表示不限制
   companionKeywordCooldownMin: Number(process.env.EA_COMPANION_KEYWORD_COOLDOWN_MIN || 0),
+  // 新建陪伴 AI 时拟人化默认是否开启
+  humanizeDefault: process.env.EA_HUMANIZE_DEFAULT === '1',
   egressImage: process.env.EA_EGRESS_IMAGE || 'ea-egress:latest',
   egressContainer: 'ea-egress',
   controlNetwork: 'ea-control',
@@ -82,6 +84,10 @@ const config = {
 
   recoveryCompensation: 2_000_000,
   adminMessageCompensation: 50_000,
+  // 干净重启时等待在途请求结束的上限；超时后强制断开长连接（SSE/长轮询）
+  restartDrainMs: Number(process.env.EA_RESTART_DRAIN_MS || 8000),
+  // 管理员留言正文上限；超出部分会截断并在正文末尾标注
+  adminMessageMaxChars: 8000,
   recoveryHeartbeatGapMs: 30 * 1000,
   recoveryDockerWaitMs: Number(process.env.RECOVERY_DOCKER_WAIT_MS || 5 * 60 * 1000),
   recoveryRetryIntervalMs: Number(process.env.RECOVERY_RETRY_INTERVAL_MS || 20 * 1000),

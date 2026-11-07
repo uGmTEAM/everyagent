@@ -12,6 +12,7 @@ const inbox = require('../inbox');
 const companion = require('../companion');
 const reminders = require('../reminders');
 const prompts = require('../prompts');
+const plugins = require('../plugins');
 const { authAgent } = require('../proxy');
 const { nowIso, truncate, fingerprintText } = require('../util');
 
@@ -462,14 +463,64 @@ router.post('/event', (req, res) => {
 });
 
 // 陪伴模式：AI 运行时从平台取待回复消息，并通过平台转发到 QQ。
-router.get('/persona', (req, res) => {
+router.get('/persona', async (req, res) => {
   const agent = req.agent;
+  let persona = prompts.personaBlock(agent).trim();
+  // 插件可追加人格补充（persona.extra），失败时保持核心人格
+  try {
+    const extra = await plugins.runHook('persona.extra', { agent, persona });
+    if (extra?.text) persona = [persona, extra.text].filter(Boolean).join('\n\n');
+  } catch {
+    // 插件异常不影响人格下发
+  }
   res.json({
     id: agent.id,
     mode: agent.mode,
     persona_mode: agent.persona_mode || 'single',
-    persona: prompts.personaBlock(agent).trim()
+    persona
   });
+});
+
+// 插件工具：容器启动后拉取定义，调用时由平台转发到插件 worker
+router.get('/plugin-tools', (req, res) => {
+  res.json({ tools: plugins.toolDefinitions() });
+});
+
+router.post('/plugin-tools/call', async (req, res) => {
+  const pluginId = String(req.body?.plugin_id || '');
+  const tool = String(req.body?.tool || '');
+  const args = req.body?.args && typeof req.body.args === 'object' ? req.body.args : {};
+  if (!pluginId || !tool) {
+    return res.json({ ok: false, error: '缺少 plugin_id 或 tool' });
+  }
+  try {
+    const result = await plugins.callTool(pluginId, tool, args);
+    return res.json({ ok: true, result });
+  } catch (error) {
+    return res.json({ ok: false, error: error.message });
+  }
+});
+
+// 拟人化：AI 每次请求前取行为提示；也允许 AI 自己开/关各子项
+router.get('/behavior', (req, res) => {
+  const cfg = companion.humanizeConfig(req.agent);
+  res.json({
+    enabled: cfg.enabled,
+    config: cfg,
+    text: prompts.humanizeBlock(cfg).trim()
+  });
+});
+
+router.post('/humanize', (req, res) => {
+  if (req.agent.mode !== 'companion') {
+    return res.status(400).json({ error: { message: '该 AI 不是陪伴模式' } });
+  }
+  try {
+    const cfg = companion.setHumanize(req.agent.id, req.body || {});
+    res.json({ ok: true, enabled: cfg.enabled, config: cfg, text: prompts.humanizeBlock(cfg).trim() });
+  } catch (error) {
+    res.status(400).json({ error: { message: error.message } });
+  }
 });
 
 // 群聊命中词：AI 自己维护，scope 由是否传 conversation_id 决定
@@ -513,14 +564,21 @@ router.post('/keywords/remove', (req, res) => {
   }
 });
 
-router.get('/companion/inbox', (req, res) => {
+router.get('/companion/inbox', async (req, res) => {
   const agent = req.agent;
   if (agent.mode !== 'companion') {
     return res.status(400).json({ error: { message: '该 AI 不是陪伴模式' } });
   }
   const limit = Math.max(1, Math.min(20, Number(req.query.limit) || 10));
   const rows = companion.pendingForAgent(agent.id, limit);
-  const messages = rows.map((row) => {
+  if (!rows.length) {
+    return res.json({ messages: [] });
+  }
+  // 私聊消息常常没有昵称，用好友列表缓存补上，否则 AI 只看到一串 QQ 号认不出人
+  const contexts = rows.map((row) => companion.contextFor(agent.id, row.conversation_id, row.id, 6));
+  await companion.enrichSenders(agent, rows);
+  await companion.enrichSenders(agent, contexts.flat());
+  const messages = rows.map((row, index) => {
     let segments = [];
     try {
       segments = row.segments_json ? JSON.parse(row.segments_json) : [];
@@ -550,16 +608,29 @@ router.get('/companion/inbox', (req, res) => {
       events: derived.events,
       reply_to: derived.reply_to,
       group: derived.group,
-      context: companion.contextFor(agent.id, row.conversation_id, row.id, 6).map((item) => ({
+      context: (contexts[index] || []).map((item) => ({
         direction: item.direction,
+        sender_uin: item.sender_uin,
         sender_name: item.sender_name,
         content: item.content,
         created_at: item.created_at
       }))
     };
   });
-  if (messages.length) companion.markDelivered(messages.map((item) => item.id));
+  // 拉取只记次数，不算送达；回合结束由容器调用 /companion/ack 确认，模型失败时不确认以便重投
+  if (messages.length) companion.markFetched(messages.map((item) => item.id));
   res.json({ messages });
+});
+
+// 容器在回合结束后确认本批消息已处理（成功回复或明确决定不回复）
+router.post('/companion/ack', (req, res) => {
+  const agent = req.agent;
+  if (agent.mode !== 'companion') {
+    return res.status(400).json({ error: { message: '该 AI 不是陪伴模式' } });
+  }
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((id) => Number(id)).filter(Number.isFinite) : [];
+  const acked = companion.ackMessages(agent.id, ids.slice(0, 50));
+  res.json({ ok: true, acked });
 });
 
 // 管理者账号登记：AI 查看已登记账号；确认身份后可手动补充登记。

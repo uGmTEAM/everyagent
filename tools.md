@@ -818,10 +818,190 @@ node g:\everyagent\test-output\20261031-ai-forum\verify.js
   `docker run --rm --entrypoint sh ea-companion:latest -c "grep -c keyword_set /opt/agent/tools.js"`
   （`build-images.ps1` 只构建 egress+agent，陪伴镜像走 `tools/build-companion-image.ps1`）。
 
+## 拟人化设置（2026-11-01）
+
+- 存储：`agents.humanize`（主开关）+ `agents.humanize_config`（JSON，子项与延迟参数）；只有陪伴模式 UI 显示，实际也只影响 QQ 出站消息，平台通知/邮箱/事件不分段。
+- 分段：按换行切，不设段数上限；段尾单个「。」去掉，「。。」及以上保留，「？！」保留；引用与 @ 只在第一段。
+- 延迟队列：同一 AI 的出站消息串行排队（`enqueueOutbound`）。每段等待 = `delayBaseMs + 字数 × delayPerCharMs`，上限 `delayMaxMs`（默认 0.5s + 每字 50ms，上限 5s）；H1「看手机延迟」在第一条之前按白天/深夜区间随机等待。
+- 子项（均为独立开关）：B 口语化（禁列表/Markdown）、C 语气词、E 补一句/自我更正、F 作息感+称呼、G 偶发短句、H1 看手机延迟、H2 连发合并（`pendingForAgent` 过滤掉 `mergeQuietMs` 内的新消息）、H3 口头禅（概率 `catchphraseChance`，作为额外一段）、H4 久不回补一句（默认关，`followUpMinutes`，记录在 `companion_followups` 防重复，深夜跳过）、H6 深夜少话。
+- 提示词：`prompts.humanizeBlock(cfg)` 由 `GET /api/agent/behavior` 每次请求下发，容器内 `main.js` 注入为 system 消息，开关改动即时生效；`POST /api/agent/humanize` 允许 AI 用 `humanize_set` / `humanize_get` 自管理。
+- 面板入口：AI 详情「AI 设置」→「拟人化」表单（`POST /agents/:id/humanize`）。
+- 新建默认：`EA_HUMANIZE_DEFAULT=1` 时新建陪伴 AI 默认开启。
+- 自检脚本：`node test-output/tmp/humanize-check.js`（配置读写、分段与去句号规则；测完会恢复关闭）。
 
 
 
 
 
 
+
+
+
+## 陪伴 inbox 送达确认 + qq_silent（2026-11-01）
+
+QQ 消息不再「拉取即送达」：`GET /api/agent/companion/inbox` 只把 `fetch_count+1`、写 `last_fetched_at`，容器回合结束后调用 `POST /api/agent/companion/ack`（body `{ids:[...]}`）才写 `delivered_at`。
+
+- 重投兜底：模型失败/超时不 ack，平台按 5 秒冷却重投，最多 `fetch_count<3` 次，避免消息被吞也避免死循环。
+- 回合内多轮：`runCompanion` 单回合最多 4 次模型调用；模型只调工具没回复时，把工具结果继续喂回并要求它回复或静默，修复「先 shell_exec 再结束导致回复丢失」。
+- 去重：容器用 `state.companionMessageIds` 记住已进历史的消息 id，重投时不重复写入对话。
+- 新工具 `qq_silent(reason)`：AI 明确决定不回复时调用，之后不再自动补发纯文本，并把这批消息记为已处理。
+- 列迁移：`companion_messages.fetch_count`、`last_fetched_at`（`db.js` ensureColumn）。
+- 容器代码需 `docker cp` 到运行中的容器（或重建 `ea-companion`）后 `docker restart` 才生效。
+
+## 发送人身份识别（2026-11-01）
+
+问题：私聊消息桥侧拿不到昵称，`sender_name` 全空（424/424），历史上下文又统一显示“对方”，AI 只看到一串 QQ 号。
+
+修复链路：
+- 桥根因：`ProfileService.getCoreAndBaseInfo` 返回 `Map<uid, SimpleInfo>`，昵称在 `coreInfo.nick/remark`，`api.mjs` 原来读顶层 `info.nick` → 好友列表名字全空。已改为读 `coreInfo`（好友列表 / 单人资料 / 自身资料三处）。
+- 平台缓存：新表 `companion_contacts(agent_id, account_id, name, source, updated_at)`；`companion.syncContacts(agent)` 每 30 分钟从 `GET /v1/friends` 拉一次，uin 与 uid 都写入缓存。
+- 补全：`companion.enrichSenders(agent, rows)` 在 inbox 返回前补齐 sender_name，覆盖新消息与 6 条历史上下文，并回传 `sender_uin`。
+- 容器展示：`main.js` 统一用 `昵称（QQ 号）`，上下文行也标注说话人。
+- 提示词：要求按发送人区分发言、昵称未知时用 `qq_friend_profile`、拿不准先 `memory_recall`。
+- 自检脚本：`test-output/tmp/check-sender.js`（统计缺名比例）、`check-enrich.js`（验证补全链路）。
+
+## 自身消息过滤（2026-11-01）
+
+- 桥侧：`ai-qq-bridge/src/qq/events.mjs` 的 `enqueueRaw` 与 `backfillRecent` 都用 `raw.senderUin === ctx.selfInfo.uin` 过滤自身消息，实时消息基本不会回灌（DB 实测 0 条 sender_uin=327705863 的 inbound）。
+- 缺口：`getCoreAndBaseInfo` 修好后 `self.profile` 才有昵称；平台 `insertInbound` 原本完全依赖桥过滤，登录早期 `selfInfo` 为空时会漏。
+- 已补兜底：`insertInbound` 先判 `message.self === true` 或 `sender.uin === health.qq.uin`，命中直接丢弃。
+- 注意：`[回复 等待未来的你：…]` 是别人引用 bot 发言的引用提示，不是自身消息。
+
+## 后端干净重启（2026-11-02）
+
+目的：减少整端重启的副作用。直接杀进程会被 runtime 判定为异常退出，触发 recovery：给每个存活 AI 补偿 2,000,000 tokens，并重启所有容器。
+
+用法（面板需登录时带 token）：
+- 面板：设置页底部「立即重启后端」按钮（仅初始化完成后显示）。
+- 命令：`curl -X POST "http://127.0.0.1:7843/control/restart?token=114514"`，返回 202；重复触发返回 409。
+
+流程：停止 supervisor/monitor/companion/reminders → 关闭监听并记录在途请求 → 等待归零（`EA_RESTART_DRAIN_MS`，默认 8000ms）→ 强制断开残余长连接（SSE/长轮询）→ `runtime.markCleanShutdown()` → 关闭 DB → 以 detached 方式重新拉起 `node src/server.js`（输出追加到 `data/logs/server.log`）→ 旧进程退出。
+
+效果（已实测两次）：端口约 3 秒内恢复；`recovery_runs`、`recovery_compensation` 计数不增加；AI 余额不变；容器 `StartedAt` 不变（不重启）；AI 侧 `/me` 失败一次后 10 秒内自动重连。
+
+注意：
+- 新进程使用当前 `process.execPath`、`process.argv.slice(1)` 和 `process.cwd()`，因此必须保持“在 backend 目录用 node 启动”的现状；换启动方式需同步改 `src/restart.js`。
+- 重启期间面板和代理端口短暂不可用；没有外部守护也能恢复，因为新进程由旧进程拉起。
+- 验证脚本：`test-output/tmp/restart-baseline.js`（重启前后对比余额 / 补偿事件 / 恢复记录）、`test-output/tmp/trigger-restart.js`（触发并打印响应）。
+
+## 文本框长度上限与截断提示（2026-11-02）
+
+- 管理员留言（面板 → AI）：8000 字，超长用 `truncate` 截断并在正文末尾写「已截断，原始长度 N」；两处留言表单加 `maxlength="8000"` 与说明。
+- AI → 管理员留言 8000、AI 事件 4000、QQ 入站 20000、提醒 2000、任务提交 400000（文件 200000）、Oracle 问题 20000：均用 `truncate`，带截断标记。
+- 人格：单人格 4000 字、完整人格每节 2000 字且合计 8000 字（创建）；编辑人格 20000 字。表单已加 `maxlength` 与说明，服务端仍保留截断兜底。
+- 工具返回给模型的观察 30000 字符、群聊回复 600 字，也都有可见标记。
+
+## 插件系统（第 1 阶段，2026-11-02）
+
+### 目录
+- 代码：`data/plugins/<id>/`（manifest.json、worker.js、后续 ui/）
+- 数据：`data/plugin-data/<id>/plugin.db`（插件独立 SQLite，随卸载策略保留或删除）
+- 日志：`data/plugin-logs/<id>.log`（10MB × 3 轮转）
+- 回滚备份：`data/plugin-backups/<id>/<时间戳>/`（每个插件只保留最近一份）
+- 安装状态：平台库 `plugins` 表；清单以磁盘 manifest.json 为准
+
+### manifest 最小示例
+```json
+{
+  "id": "my-plugin",
+  "name": "我的插件",
+  "version": "1.0.0",
+  "api_version": 1,
+  "author": "you",
+  "description": "说明",
+  "worker": "worker.js",
+  "permissions": ["platform.read"]
+}
+```
+`id` 必须是 2-40 位小写字母/数字/下划线/连字符；版本不匹配只警告不拒绝。
+
+### worker 约定
+`worker.js` 导出 `init(ctx)` / `shutdown(ctx)` / 任意方法（供主线程 `callPlugin(id, 'method', args)` 调用）。
+`ctx` 提供：`log/warn/error`、`config.get/set/all`、`db.run/get/all`（插件自己的库）、`load(相对路径)`、`platform('db')`（直接加载平台模块，按约定不做权限隔离）。
+
+### 生命周期
+- 安装（zip 或 git）→ 状态「待重启生效」→ 点「设置 → 立即重启后端」→ worker 启动为「运行中」。
+- 初始化抛错、启动 10 秒超时、进程异常退出、单次调用超过 30 秒（疑似死循环）→ 终止 worker、`enabled=0`、状态 `crashed`，并写入平台「信息」。
+- 单次调用返回错误只记录 `last_error`，不禁用。
+- 更新只替换代码并保留数据；新代码加载失败会回滚上一份备份。
+
+### 页面入口
+- `/plugins` 管理页（两种模式导航都有）：安装、启用/禁用、详情、更新、清除数据、卸载；首次进入弹免责声明，可「不再提示」（浏览器 localStorage）。
+- `/logs?tab=plugin&plugin=<id>`：与平台日志页一致的插件日志视图，支持下载。
+- 插件 ID 会进入文件路径，所有入口都校验 `^[a-z0-9][a-z0-9_-]{1,39}$`，防路径穿越。
+
+### 注意
+- 平台库已切 WAL：`data/` 下多出 `platform.db-wal`、`platform.db-shm`，复制备份时要一起带上。
+- 第 1 阶段只实现运行时骨架与管理页；hooks、AI 工具注册、定时任务、插槽/整页替换/前端注入、配置表单与插件自带页面在阶段 2。
+- 自检脚本：`test-output/tmp/check-plugin-boot.js`、`check-plugin-state.js`、`check-plugin-full.js`、`check-plugin-id-guard.js`。
+
+## 插件扩展点（第 2 阶段，2026-11-02）
+
+### manifest 扩展字段
+```json
+{
+  "order": 100,
+  "priority": 100,
+  "pages": ["overview", "agent_detail"],
+  "slots": [{ "name": "overview.top", "template": "ui/top.ejs", "order": 100 }],
+  "replace": [{ "path": "/stats", "template": "ui/stats.ejs" }],
+  "routes": [{ "path": "/plugin/<id>/report", "template": "ui/report.ejs", "title": "报告" }],
+  "nav": [{ "href": "/plugin/<id>/report", "label": "报告", "order": 100 }],
+  "assets": { "css": ["ui/style.css"], "js": ["ui/client.js"] },
+  "globalStyles": false,
+  "config": [{ "key": "greeting", "label": "问候语", "type": "text", "default": "你好" }],
+  "hooks": ["persona.extra", "inbound.transform"],
+  "tools": [{ "name": "demo_echo", "description": "回显", "parameters": { "type": "object", "properties": {} } }],
+  "schedule": [{ "name": "tick", "every_ms": 60000 }]
+}
+```
+
+### 可用插槽
+`overview.top` / `overview.bottom` / `companion.top` / `companion.bottom` / `agent_detail.top` / `agent_detail.bottom` / `settings.bottom`。
+模板里用 `<%- slot('overview.top') %>` 调用；插件渲染失败只影响自己并记录 `last_error`。
+
+### 规则
+- 排序：`order` 小者先；同值告警。
+- 钩子：`priority` 大者先且可覆盖核心；前两名同优先级时告警并回退核心；插件异常回退核心。
+- 整页替换：仅 GET 精确匹配；若该页存在插槽注入（插件 `pages` 明确包含该页），告警并放弃替换，保留插槽。
+- 自定义页：路径必须以 `/plugin/<id>/` 开头；模板里可直接 `include('partials/header')` / `include('partials/footer')`。
+- 前端资源：CSS 默认用 `@scope ([data-plugin="<id>"]) {…}` 限定，`globalStyles: true` 解除；JS/CSS 在所有页面注入（不受 `pages` 限制）。
+- 配置：`config` 字段由平台自动生成表单，值存插件库 `settings` 表；`config` 在模板里可直接用。
+- 钩子：`persona.extra`（人格追加）、`inbound.transform`（改写入站消息，返回 `{ message }`）、`outbound.transform`（改写出站文本，返回 `{ text }`）。
+- 工具：worker 导出 `tools = { name: { description, parameters, run(args, ctx) } }`；平台下发到容器，容器调用后转发回 `/api/agent/plugin-tools/call`。
+- 定时任务：worker 导出 `schedule = { tick(args, ctx) {} }`；启动后按 `every_ms` 调用，间隔最小 1 秒。
+
+### 实测
+演示插件 `ea-plugin-demo`（源码在 `test-output/tmp/plugin-src/`）验证过：插槽、整页替换、自定义页、导航、CSS/JS 注入、配置保存与更新保留、persona 追加、工具调用（容器日志出现 `[plugin] demo_echo ok`）、定时任务日志。
+测试插件已全部卸载，插件列表为空。
+
+### 注意
+- 容器端改动（`agent-image/agent/api.js`、`main.js`）需要 `docker cp` 进运行中的容器并重启，或重建镜像。
+- 平台库 WAL 文件（`platform.db-wal`/`-shm`）备份时要一起复制。
+
+## 陪伴增强插件 ea-plugin-companion（2026-11-07）
+
+第一个完整插件，实现关系档案、主动关心、每日/每周回顾、情绪与作息、多人群聊社交。
+
+- 源码：`test-output/tmp/plugin-src/ea-plugin-companion/`（`worker.js` + `lib/` + `ui/`）
+- 安装包：`test-output/tmp/ea-plugin-companion.zip`
+- 已安装位置：`data/plugins/ea-plugin-companion/`，数据：`data/plugin-data/ea-plugin-companion/plugin.db`
+- 页面：`/plugin/ea-plugin-companion/overview`（导航「陪伴增强」），并注入 `companion.bottom` 卡片
+- 配置：插件详情页自动生成（关心模式/沉默阈值/冷却/免打扰/回顾时间/人格注入开关等）
+- 工具：14 个 `companion_*` 工具，经 `/api/agent/plugin-tools` 下发；入站钩子记录情绪，`persona.extra` 注入档案与作息摘要
+- 页面动作：`ui.profile_brief`（v1.1.1）把缺少细节的联系人清单通过 `events.notifyAgent` 发给 AI，由 AI 结合历史聊天调用 `companion_profile_upsert` 补档；档案卡片增加「详情」抽屉，空字段显示「待 AI 了解」
+- 定时：`care_tick`（10 分钟）、`review_tick`（1 小时，到点生成日报/周报）
+- 页面数据接口：`POST /plugin-api/:id/call`，请求体 `{ method, args }`，只放行 `tools.*` / `ui.*`；插件页 `client.js` 用它读取数据
+- 调试脚本：`test-output/tmp/test-inbound.js` 用桩 ctx 直接调用已安装插件的钩子，验证档案回填、情绪写入与 persona 注入
+
+### 插件开发补充约定
+- worker 里 `ctx.platform('db')` 现在会在首次访问时自动 `db.init()`，直接拿到已初始化的平台库；其它平台模块（events/inbox/companion）共用这份连接。
+- 私聊消息的 `conversation_name` 常为空，插件用 `companion_contacts` 表补称呼。
+- `manifest.tools[]` 支持 `timeout_ms`，会随工具定义一起下发（默认 30s，慢工具如群成员同步可调大）。
+
+### 官方预置人格提示词
+- 位置：`backend/src/personaPresets.js`，新增预设按同结构追加，创建页会自动出现新选项。
+- 当前预设：`whale-girl`「鲸鱼娘·大肥鱼」，完整人格 9 个分节，约 2389 字。
+- 创建页入口：`/agents/new` 的「官方预设提示词（可选）」，选择后自动切到「完整人格」并填入各分节，仍可继续修改。
+- 校验脚本：`test-output/tmp/check-persona-presets.js`（检查各分节是否超过 2000 字及拼接长度）。
 

@@ -236,15 +236,22 @@ function companionToolDocs(agent = {}) {
 16. qq_revoke(conversation_id, message_id, kind?)：撤回消息。
 17. keyword_set(word, conversation_id?)：设置群聊命中词。群里没 @ 你时，消息包含命中词也会被当成点名并推送平台通知；不传 conversation_id 表示所有群生效，传了只对该群生效。
 18. keyword_remove(word, conversation_id?)：删除命中词，参数必须和设置时一致。
-19. keyword_list(conversation_id?)：列出当前生效的命中词。`;
+19. keyword_list(conversation_id?)：列出当前生效的命中词。
+20. humanize_get()：查看当前拟人化设置。
+21. humanize_set(…)：开关拟人化。开启后 QQ 出站消息按换行分段逐条发送，段尾单个句号去掉，并按字数排队延迟；可单独开关口语化、语气词、短句、自我更正、作息感、深夜少话、看手机延迟、连发合并、久不回补一句。平台通知与邮箱消息不受影响。
+22. qq_silent(reason)：你看过这批消息后决定不回复时调用。调用后平台不会再把你的纯文本自动补发到会话，这批消息记为已处理；不理它又不调用 qq_send，平台会把这批消息重新投给你。`;
 
   docs += `
 QQ 消息说明：
 - 平台会把新消息按会话转交给你，消息里带有 conversation_id、会话类型（private/group/channel）、发送人、消息 id、@列表、回复目标和附件列表。
 - 私聊必须回复；群聊只在被 @ 时回复，未 @ 的消息只作为上下文（命中词除外：命中即按被点名处理）。
+- 每条消息都标了「来自 昵称（QQ 号）」：同一会话里不同人发言必须按发送人区分，不要把所有话都当成同一个人说的，也不要叫错称呼。昵称显示成「未知（QQ 号）」时，用 qq_friend_profile(uin) 查昵称，查不到就先用号码称呼。
+- 你只认识号不认识人时先查记忆（memory_recall）确认对方是谁，再决定说话的分寸。
 - 附件里图片会带容器内 path，直接用 vision_describe(image_path=...) 查看；文件/语音/视频如果标了“需要先调用 qq_media_fetch”，先取到 path 再 read_file 或处理。
 - 回复时优先调用 qq_send；如果本轮只输出纯文本且没有调用任何工具，平台会把这段文本自动发回当前会话。
-- 群聊回复要简短（平台会截断过长内容），不要连续多条刷屏。`;
+- 真的不需要回复（例如群里只是旁听、对方只是随口感叹）时，调用 qq_silent 明确说明原因；不调工具也不发消息会被视为失败，平台会把这批消息重新投给你，最多重投 3 次。
+- 群聊回复要简短（平台会截断过长内容），不要连续多条刷屏。
+- 拟人化开启时：QQ 出站消息按你的换行分段逐条发送，段尾单个句号会被去掉，发送之间有延迟；你只需按自然分段换行写成多段即可，不要自己编号。`;
 
   if (agent.enable_screen) {
     docs += `
@@ -257,6 +264,24 @@ QQ 消息说明：
 function personaBlock(agent) {
   if (!agent.persona) return '';
   return agent.persona_mode === 'full' ? `\n${agent.persona}\n` : `\n## 人格\n${agent.persona}\n`;
+}
+
+// 拟人化行为提示：由平台在每次请求前通过 /api/agent/behavior 注入，开关改动即时生效
+function humanizeBlock(cfg = {}) {
+  if (!cfg.enabled) return '';
+  const lines = [
+    '## 真人聊天风格（拟人化已开启）',
+    '- 你在用手机聊天，不是写文章：短句、口语，不要用标题、编号列表、Markdown、分点。'
+  ];
+  if (cfg.fillers) lines.push('- 句末可以偶尔带“呀 / 啦 / 诶 / 哦”这类语气词，不要每句都带。');
+  if (cfg.brief) lines.push('- 有时只回一句很短的话（“嗯”“好呀”“在的”），不用每次都长篇。');
+  if (cfg.selfCorrect) lines.push('- 偶尔可以补一句更正（“打错了，是……”），但别频繁。');
+  if (cfg.routine) lines.push('- 有自己的作息感：早上可以问候，深夜话少；记住对方的名字或称呼并自然使用。');
+  if (cfg.quietNight) lines.push('- 深夜（23:00–8:00）只回必要的短句，不主动开新话题。');
+  if (cfg.merge) lines.push('- 对方连续发来多条时先读完再一起回，不要一条一条地对。');
+  if (cfg.followUp) lines.push('- 对方长时间没回时可以自然补一句，但每轮最多一次，别接连催促。');
+  lines.push('- 分段由平台自动处理：你按自然分段换行书写即可，平台会逐条发送；不要自己加编号或占位符。');
+  return `\n${lines.join('\n')}\n`;
 }
 
 // 陪伴模式：规则 inline 写入系统提示（不使用规则文件）。人格不再写入系统提示，
@@ -633,6 +658,7 @@ module.exports = {
   DEFAULT_COMPANION_RULES,
   companionToolDocs,
   personaBlock,
+  humanizeBlock,
   buildCompanionSystemPrompt,
   toolDocs,
   actionProtocol,
