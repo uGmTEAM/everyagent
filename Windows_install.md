@@ -24,6 +24,8 @@ EveryAgent 是一个在 Docker 沙盒里自主运行多个 AI 研究体的平台
 
 ## 2. 安装依赖
 
+> `install.ps1` 会自动安装缺失的 Node.js / WSL2 / Docker Desktop：优先用 winget，失败时回退官方安装包；需要管理员权限，会弹出 UAC 并在新窗口继续。本节的手动步骤供提前准备或自动安装失败时使用。
+
 ### 2.1 Node.js 24 LTS
 
 后端使用 Node 内置的 `node:sqlite`，**必须 Node.js 22.5 以上，推荐 24 LTS**。
@@ -106,13 +108,15 @@ cd G:\everyagent
 
 ### 4.1 一键安装（推荐）
 
+双击发行包根目录的 `install.bat`：会自动请求管理员权限（UAC），然后在管理员窗口中调用 `install.ps1` 完成安装。也可以在 PowerShell 中直接执行：
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 ```
 
 脚本依次完成：
 
-1. 环境检查：安装目录、Node.js、npm、Docker（Linux 容器）、磁盘、内存、端口；
+1. 环境检查：安装目录、Node.js、npm、WSL2、Docker（Linux 容器）、磁盘、内存、端口；缺失的 Node.js / WSL2 / Docker Desktop 会自动安装（需要管理员权限，会弹出 UAC 并在新窗口继续）；
 2. 安装后端依赖（`backend/node_modules`）；
 3. 构建 `ea-egress:latest` 与 `ea-agent:latest`（已存在则跳过）；
 4. 准备 `data\` 目录；
@@ -123,12 +127,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 | 参数 | 说明 |
 | --- | --- |
 | `-Check` | 只做环境检查，不做任何改动 |
+| `-NoAutoInstall` | 不自动安装系统依赖，只检查并提示 |
+| `-SkipDocker` | 跳过 Docker 检查与镜像构建（Windows Sandbox 或无 Docker 环境下验证面板） |
 | `-SkipImages` | 跳过镜像构建（镜像已准备好时） |
 | `-ForceImages` | 强制重建两个镜像 |
 | `-NoAutostart` | 不创建开机自启快捷方式 |
 | `-OpenPanelOnStartup` | 登录后同时打开面板 |
 
-安装完成后可立即启动：
+> **Windows Sandbox**：沙盒不支持嵌套虚拟化，WSL2 与 Docker Desktop 无法运行。在沙盒内请用 `install.bat -SkipDocker` 只验证安装流程与管理面板；AI 容器必须在宿主机（或支持嵌套虚拟化的虚拟机）中运行。
+
+安装完成后可立即启动（也可以双击 `start-everyagent.bat`）：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\start-everyagent.ps1

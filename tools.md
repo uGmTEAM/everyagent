@@ -16,17 +16,24 @@ Linux 下 `config.js` 的 Docker socket 默认已是 `/var/run/docker.sock`（Wi
 Windows 安装步骤见根目录 `Windows_install.md`。
 
 ## install.ps1（Windows 安装脚本，发行用）
-在发行包根目录执行，完成环境检查（安装目录、Node 22.5+、npm、Docker Linux 容器、磁盘、内存、端口）→ 安装后端依赖 → 构建 `ea-egress` / `ea-agent` 镜像 → 准备 `data/` → 在 Windows「启动」文件夹创建 `EveryAgent.lnk`（登录后在后台启动平台服务）。
+在发行包根目录执行，完成环境检查（安装目录、Node 22.5+、npm、WSL2、Docker Linux 容器、磁盘、内存、端口）→ 自动安装缺失的 Node.js / WSL2 / Docker Desktop（winget 优先，回退官方安装包；需要管理员权限时自动弹出 UAC 并在新窗口继续）→ 安装后端依赖 → 构建 `ea-egress` / `ea-agent` 镜像 → 准备 `data/` → 在 Windows「启动」文件夹创建 `EveryAgent.lnk`（登录后在后台启动平台服务）。
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Check        # 只检查，不改动
-powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -SkipImages   # 镜像已就绪时跳过构建
-powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -ForceImages  # 强制重建镜像
-powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -NoAutostart  # 不创建自启快捷方式
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Check          # 只检查，不改动、不安装
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -NoAutoInstall  # 不自动安装系统依赖
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -SkipImages     # 镜像已就绪时跳过构建
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -ForceImages    # 强制重建镜像
+powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -NoAutostart    # 不创建自启快捷方式
 ```
 
 端口沿用 `EA_PANEL_PORT`（默认 7843）/ `EA_PORT`（默认 7842）。Windows 安装步骤见根目录 `Windows_install.md`。
+
+## install.bat / start-everyagent.bat（Windows 双击入口）
+- `install.bat`：双击运行，自动请求管理员权限（UAC），再调用 `install.ps1`；参数透传，例如 `install.bat -Check`、`install.bat -SkipDocker`。
+- `start-everyagent.bat`：双击启动平台，调用 `tools/start-everyagent.ps1`（默认打开面板）；参数透传，例如 `start-everyagent.bat -NoBrowser`。
+- 两个 bat 只负责入口与提权，安装/启动逻辑仍在 PowerShell 脚本中（winget、msi、快捷方式等需要 PowerShell）。
+- Windows Sandbox 不支持嵌套虚拟化，Docker Desktop / WSL2 无法运行；沙盒内用 `install.bat -SkipDocker` 只能验证安装与面板。
 
 ## tools/bakup.ps1
 编辑已有文件前的备份脚本。按用户规则在文件所在目录创建 `bakup\<时间戳>\`，只复制被编辑的文件，写入 `bakup.md` 记录，最多保留 5 份。

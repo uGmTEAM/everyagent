@@ -1,20 +1,26 @@
 ﻿# EveryAgent 安装脚本（Windows）
 #
-# 完成：环境检查 → 安装后端依赖 → 构建 Docker 镜像 → 创建开机自启快捷方式（后台启动平台服务）。
+# 完成：环境检查（缺失的 Node.js / WSL2 / Docker Desktop 会自动安装）→ 安装后端依赖 → 构建 Docker 镜像 → 创建开机自启快捷方式（后台启动平台服务）。
 #
 # 用法：
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -Check             只做环境检查，不做任何改动
+#   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -NoAutoInstall     不自动安装系统依赖，只检查并提示
+#   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -SkipDocker        跳过 Docker 检查与镜像构建（沙盒/无 Docker 环境）
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -SkipImages        跳过镜像构建（镜像已准备好时）
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -ForceImages       强制重建两个镜像
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -NoAutostart       不创建开机自启快捷方式
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -OpenPanelOnStartup 登录后同时打开面板
 #
+# 自动安装系统依赖需要管理员权限：当前不是管理员时会弹出 UAC 并在新窗口继续。
+# Windows Sandbox 不支持嵌套虚拟化，WSL2 与 Docker Desktop 无法运行；沙盒内请用 -SkipDocker 只验证面板安装。
 # 端口可用环境变量覆盖：EA_PANEL_PORT（默认 7843）、EA_PORT（默认 7842）。
 
 [CmdletBinding()]
 param(
     [switch]$Check,
+    [switch]$NoAutoInstall,
+    [switch]$SkipDocker,
     [switch]$SkipImages,
     [switch]$ForceImages,
     [switch]$NoAutostart,
@@ -26,6 +32,8 @@ $root = $PSScriptRoot
 $backendDir = Join-Path $root 'backend'
 $logDir = Join-Path $root 'data\logs'
 $script:errors = 0
+$autoInstall = (-not $Check) -and (-not $NoAutoInstall)
+$needInstall = New-Object System.Collections.ArrayList
 
 function Write-Step([string]$text) {
     Write-Host ''
@@ -71,6 +79,124 @@ function Test-PortInUse([int]$port) {
     }
 }
 
+function Get-NodeInfo {
+    $node = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $node) { return $null }
+    try {
+        $version = "$(& node -p 'process.versions.node' 2>$null)".Trim()
+        $parts = $version.Split('.')
+        if ($parts.Count -lt 2) { return $null }
+        return [pscustomobject]@{ Version = $version; Major = [int]$parts[0]; Minor = [int]$parts[1] }
+    } catch {
+        return $null
+    }
+}
+
+function Test-Admin {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Test-WslReady {
+    $wsl = Get-Command wsl -ErrorAction SilentlyContinue
+    if (-not $wsl) { return $false }
+    try {
+        & wsl --status *> $null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
+function Test-WindowsSandbox {
+    # Windows Sandbox 的内置账户固定为 WDAGUtilityAccount，且不支持嵌套虚拟化。
+    return ($env:USERNAME -eq 'WDAGUtilityAccount')
+}
+
+function Update-SessionPath {
+    $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $user = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $parts = @()
+    if ($machine) { $parts += $machine }
+    if ($user) { $parts += $user }
+    if ($parts.Count -gt 0) { $env:Path = ($parts -join ';') }
+}
+
+function Install-WithWinget([string]$id, [string]$name) {
+    $winget = Get-Command winget -ErrorAction SilentlyContinue
+    if (-not $winget) { return $false }
+    Write-Host ('正在通过 winget 安装 ' + $name + ' ...')
+    & $winget.Source install --id $id -e --silent --accept-source-agreements --accept-package-agreements
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Install-NodeJs {
+    if (Install-WithWinget 'OpenJS.NodeJS.LTS' 'Node.js LTS') { return $true }
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Write-Host 'winget 不可用，改为下载 Node.js 官方安装包 ...'
+        $index = Invoke-RestMethod -Uri 'https://nodejs.org/dist/index.json' -UseBasicParsing -TimeoutSec 30
+        $release = $index | Where-Object { $_.version -like 'v24.*' } | Select-Object -First 1
+        if (-not $release) { $release = $index | Where-Object { $_.lts } | Select-Object -First 1 }
+        if (-not $release) { throw '无法获取 Node.js 版本列表' }
+        $url = 'https://nodejs.org/dist/' + $release.version + '/node-' + $release.version + '-x64.msi'
+        $msi = Join-Path $env:TEMP ('node-' + $release.version + '-x64.msi')
+        Write-Host ('下载 ' + $url)
+        Invoke-WebRequest -Uri $url -OutFile $msi -UseBasicParsing -TimeoutSec 900
+        $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', ('"' + $msi + '"'), '/qn', '/norestart') -PassThru -Wait
+        return ($process.ExitCode -eq 0 -or $process.ExitCode -eq 3010)
+    } catch {
+        Write-Host ('Node.js 自动安装失败：' + $_.Exception.Message) -ForegroundColor Red
+        return $false
+    }
+}
+
+function Install-Wsl2 {
+    Write-Host '正在启用 WSL2（wsl --install --no-distribution）...'
+    try {
+        & wsl --install --no-distribution
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        Write-Host ('WSL2 自动启用失败：' + $_.Exception.Message) -ForegroundColor Red
+        return $false
+    }
+}
+
+function Install-DockerDesktop {
+    if (Install-WithWinget 'Docker.DockerDesktop' 'Docker Desktop') { return $true }
+    try {
+        Write-Host 'winget 不可用，改为下载 Docker Desktop 官方安装包 ...'
+        $installer = Join-Path $env:TEMP 'DockerDesktopInstaller.exe'
+        Invoke-WebRequest -Uri 'https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe' -OutFile $installer -UseBasicParsing -TimeoutSec 1800
+        $process = Start-Process -FilePath $installer -ArgumentList @('install', '--quiet', '--accept-license') -PassThru -Wait
+        return ($process.ExitCode -eq 0)
+    } catch {
+        Write-Host ('Docker Desktop 自动安装失败：' + $_.Exception.Message) -ForegroundColor Red
+        return $false
+    }
+}
+
+function Restart-Elevated {
+    $shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $shell)) {
+        $shell = (Get-Command powershell.exe -ErrorAction SilentlyContinue).Source
+    }
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $PSCommandPath + '"'))
+    if ($SkipDocker) { $argList += '-SkipDocker' }
+    if ($SkipImages) { $argList += '-SkipImages' }
+    if ($ForceImages) { $argList += '-ForceImages' }
+    if ($NoAutostart) { $argList += '-NoAutostart' }
+    if ($OpenPanelOnStartup) { $argList += '-OpenPanelOnStartup' }
+    Write-Host '安装系统依赖需要管理员权限，正在以管理员身份重新运行安装脚本 ...' -ForegroundColor Yellow
+    try {
+        Start-Process -FilePath $shell -ArgumentList $argList -WorkingDirectory $root -Verb RunAs
+    } catch {
+        Write-Host '提权被取消。请右键「以管理员身份运行」PowerShell 后重新执行 install.ps1。' -ForegroundColor Red
+        exit 1
+    }
+}
+
 $panelPort = 7843
 if ($env:EA_PANEL_PORT) {
     try { $panelPort = [int]$env:EA_PANEL_PORT } catch { }
@@ -102,63 +228,97 @@ foreach ($item in $required) {
 }
 
 Write-Step '检查 Node.js'
-$node = Get-Command node -ErrorAction SilentlyContinue
-if (-not $node) {
-    Write-Fail '未安装 Node.js。需要 Node.js 22.5+（推荐 24 LTS），见 https://nodejs.org/'
-} else {
-    $nodeVersion = (& node -p 'process.versions.node' 2>$null)
-    $parts = "$nodeVersion".Trim().Split('.')
-    if ($parts.Count -lt 2) {
-        Write-Fail ('无法识别 Node.js 版本：' + $nodeVersion)
+$nodeInfo = Get-NodeInfo
+$nodeReady = $false
+if (-not $nodeInfo) {
+    if ($autoInstall) {
+        [void]$needInstall.Add('node')
+        Write-Warn '未安装 Node.js，将自动安装 Node.js 24 LTS'
     } else {
-        $major = [int]$parts[0]
-        $minor = [int]$parts[1]
-        if ($major -gt 22 -or ($major -eq 22 -and $minor -ge 5)) {
-            Write-Ok ('node ' + $nodeVersion.Trim())
-        } else {
-            Write-Fail ('node 版本过低：' + $nodeVersion.Trim() + '，需要 22.5+（推荐 24 LTS）')
-        }
-        if ($major -lt 24) {
-            Write-Warn ('推荐 Node.js 24 LTS，当前 ' + $nodeVersion.Trim())
-        }
+        Write-Fail '未安装 Node.js。需要 Node.js 22.5+（推荐 24 LTS），见 https://nodejs.org/'
+    }
+} elseif ($nodeInfo.Major -gt 22 -or ($nodeInfo.Major -eq 22 -and $nodeInfo.Minor -ge 5)) {
+    Write-Ok ('node ' + $nodeInfo.Version)
+    $nodeReady = $true
+    if ($nodeInfo.Major -lt 24) {
+        Write-Warn ('推荐 Node.js 24 LTS，当前 ' + $nodeInfo.Version)
+    }
+} else {
+    if ($autoInstall) {
+        [void]$needInstall.Add('node')
+        Write-Warn ('node 版本过低：' + $nodeInfo.Version + '，将自动升级到 Node.js 24 LTS')
+    } else {
+        Write-Fail ('node 版本过低：' + $nodeInfo.Version + '，需要 22.5+（推荐 24 LTS）')
     }
 }
 $npm = Get-Command npm -ErrorAction SilentlyContinue
 if ($npm) {
     Write-Ok ('npm ' + (& npm --version))
-} else {
+} elseif ($nodeReady) {
     Write-Fail '未安装 npm（通常随 Node.js 一起安装）'
+} else {
+    Write-Warn 'npm 随 Node.js 一起安装'
+}
+
+Write-Step '检查 WSL2'
+if ($SkipDocker) {
+    Write-Warn '已指定 -SkipDocker，跳过 WSL2 检查'
+} else {
+    $wslReady = Test-WslReady
+    if ($wslReady) {
+        Write-Ok 'WSL2 已就绪'
+    } elseif (Test-WindowsSandbox) {
+        Write-Warn 'Windows Sandbox 不支持嵌套虚拟化，WSL2 无法运行'
+    } elseif ($autoInstall) {
+        [void]$needInstall.Add('wsl')
+        Write-Warn 'WSL2 未就绪，将自动执行 wsl --install（安装后可能需要重启 Windows）'
+    } else {
+        Write-Warn 'WSL2 未就绪：Docker Desktop 需要 WSL2，请手动启用（wsl --install）'
+    }
 }
 
 Write-Step '检查 Docker'
-$docker = Get-Command docker -ErrorAction SilentlyContinue
-if (-not $docker) {
-    Write-Fail '未安装 Docker Desktop，见 https://www.docker.com/products/docker-desktop/'
+if ($SkipDocker) {
+    Write-Warn '已指定 -SkipDocker，跳过 Docker 检查（AI 容器无法运行，仅面板可用）'
+} elseif (Test-WindowsSandbox) {
+    Write-Warn '检测到 Windows Sandbox：不支持嵌套虚拟化，Docker Desktop 与 WSL2 无法运行。'
+    Write-Warn '沙盒内请使用 install.bat -SkipDocker 只验证面板安装；完整功能请在宿主机安装。'
+    Write-Fail 'Windows Sandbox 无法运行 Docker Desktop'
 } else {
-    Write-Ok ('docker ' + (& docker --version))
-    if (-not (Test-DockerLinux)) {
-        if (-not $Check) {
-            $desktop = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
-            if (Test-Path -LiteralPath $desktop) {
-                Write-Warn 'Docker 未就绪，正在启动 Docker Desktop 并等待 ...'
-                try {
-                    Start-Process -FilePath $desktop
-                } catch {
-                    Write-Warn ('无法启动 Docker Desktop：' + $_.Exception.Message)
-                }
-                for ($i = 0; $i -lt 18; $i++) {
-                    Start-Sleep -Seconds 5
-                    if (Test-DockerLinux) { break }
-                }
-            }
-        }
-        if (Test-DockerLinux) {
-            Write-Ok 'Docker 守护进程可用（Linux 容器）'
+    $docker = Get-Command docker -ErrorAction SilentlyContinue
+    if (-not $docker) {
+        if ($autoInstall) {
+            [void]$needInstall.Add('docker')
+            Write-Warn '未安装 Docker Desktop，将自动安装'
         } else {
-            Write-Fail '无法连接 Docker（或不是 Linux 容器模式）：请确认 Docker Desktop 已启动、WSL2 已就绪'
+            Write-Fail '未安装 Docker Desktop，见 https://www.docker.com/products/docker-desktop/'
         }
     } else {
-        Write-Ok 'Docker 守护进程可用（Linux 容器）'
+        Write-Ok ('docker ' + (& docker --version))
+        if (-not (Test-DockerLinux)) {
+            if (-not $Check) {
+                $desktop = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
+                if (Test-Path -LiteralPath $desktop) {
+                    Write-Warn 'Docker 未就绪，正在启动 Docker Desktop 并等待 ...'
+                    try {
+                        Start-Process -FilePath $desktop
+                    } catch {
+                        Write-Warn ('无法启动 Docker Desktop：' + $_.Exception.Message)
+                    }
+                    for ($i = 0; $i -lt 18; $i++) {
+                        Start-Sleep -Seconds 5
+                        if (Test-DockerLinux) { break }
+                    }
+                }
+            }
+            if (Test-DockerLinux) {
+                Write-Ok 'Docker 守护进程可用（Linux 容器）'
+            } else {
+                Write-Fail '无法连接 Docker（或不是 Linux 容器模式）：请确认 Docker Desktop 已启动、WSL2 已就绪'
+            }
+        } else {
+            Write-Ok 'Docker 守护进程可用（Linux 容器）'
+        }
     }
 }
 
@@ -198,6 +358,83 @@ foreach ($port in @($proxyPort, $panelPort)) {
     }
 }
 
+if ($needInstall.Count -gt 0) {
+    Write-Step '自动补充依赖'
+    if (-not (Test-Admin)) {
+        Restart-Elevated
+        exit 0
+    }
+
+    if ($needInstall -contains 'node') {
+        Write-Host '安装 Node.js 24 LTS ...'
+        if (-not (Install-NodeJs)) {
+            Write-Fail 'Node.js 自动安装失败，请手动安装：https://nodejs.org/'
+        } else {
+            Update-SessionPath
+            $nodeInfo = Get-NodeInfo
+            if ($nodeInfo -and ($nodeInfo.Major -gt 22 -or ($nodeInfo.Major -eq 22 -and $nodeInfo.Minor -ge 5))) {
+                Write-Ok ('node ' + $nodeInfo.Version)
+            } else {
+                Write-Warn 'Node.js 已安装，但当前会话尚未识别，请重新打开终端后重试'
+            }
+            $npm = Get-Command npm -ErrorAction SilentlyContinue
+            if ($npm) {
+                Write-Ok ('npm ' + (& npm --version))
+            } else {
+                Write-Warn 'npm 未在当前会话生效，重新打开终端后重试'
+            }
+        }
+    }
+
+    $wslNeedsReboot = $false
+    if ($needInstall -contains 'wsl') {
+        if (Install-Wsl2) {
+            Update-SessionPath
+            if (Test-WslReady) {
+                Write-Ok 'WSL2 已启用'
+            } else {
+                $wslNeedsReboot = $true
+                Write-Warn 'WSL2 已提交安装，需要重启 Windows 后重新运行 install.ps1'
+            }
+        } else {
+            Write-Fail 'WSL2 自动启用失败，请以管理员身份执行 wsl --install'
+        }
+    }
+
+    if ($needInstall -contains 'docker') {
+        if ($wslNeedsReboot) {
+            Write-Warn 'Docker Desktop 依赖 WSL2，重启后再重新运行 install.ps1 完成安装'
+        } else {
+            Write-Host '安装 Docker Desktop ...'
+            if (-not (Install-DockerDesktop)) {
+                Write-Fail 'Docker Desktop 自动安装失败，请手动安装：https://www.docker.com/products/docker-desktop/'
+            } else {
+                Update-SessionPath
+                $desktop = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
+                if ((Test-Path -LiteralPath $desktop) -and -not (Get-Process -Name 'Docker Desktop' -ErrorAction SilentlyContinue)) {
+                    Write-Host '启动 Docker Desktop 并等待就绪 ...'
+                    try { Start-Process -FilePath $desktop } catch { }
+                }
+                for ($i = 0; $i -lt 18; $i++) {
+                    Start-Sleep -Seconds 5
+                    if (Test-DockerLinux) { break }
+                }
+                if (Test-DockerLinux) {
+                    Write-Ok 'Docker 守护进程可用（Linux 容器）'
+                } else {
+                    Write-Warn 'Docker Desktop 已安装，但尚未就绪：请按提示完成首次启动（可能需重启或注销），然后重新运行 install.ps1'
+                }
+            }
+        }
+    }
+
+    if ($wslNeedsReboot) {
+        Write-Host ''
+        Write-Host '依赖安装未完成：请重启 Windows 后重新运行 install.ps1。' -ForegroundColor Yellow
+        exit 1
+    }
+}
+
 if ($script:errors -gt 0) {
     Write-Host ''
     Write-Host ('环境检查未通过（' + $script:errors + ' 项），请先解决上面的问题再安装。') -ForegroundColor Red
@@ -228,7 +465,10 @@ if (-not (Test-Path -LiteralPath (Join-Path $backendDir 'node_modules'))) {
     Write-Ok 'backend\node_modules 已存在（如需更新依赖请删除后重跑）'
 }
 
-if ($SkipImages) {
+if ($SkipDocker) {
+    Write-Step '跳过镜像构建'
+    Write-Warn '已指定 -SkipDocker，未构建或检查 ea-egress / ea-agent 镜像（AI 容器无法运行）'
+} elseif ($SkipImages) {
     Write-Step '跳过镜像构建'
     foreach ($image in @('ea-agent:latest', 'ea-egress:latest')) {
         if (Test-Image $image) {
@@ -303,6 +543,9 @@ if (-not $lanIp) {
 }
 
 Write-Step '安装完成'
+if ($SkipDocker) {
+    Write-Warn '当前为无 Docker 模式：面板可以启动，但 AI 容器无法运行。'
+}
 Write-Host ('  面板（管理后台）： http://127.0.0.1:' + $panelPort)
 if ($lanIp) {
     Write-Host ('  局域网访问：       http://' + $lanIp + ':' + $panelPort)
