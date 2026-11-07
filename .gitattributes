@@ -1,0 +1,6 @@
+# 官方工具集：容器内 Linx 使用，脚本必须保持 LF；可执行二进制不做换行转换
+toolkits/**/bin/bilic binary
+toolkits/**/bin/mail-cli binary
+toolkits/**/bin/video text eol=lf
+toolkits/**/bin/qq-bridge-client text eol=lf
+toolkits/video-cli/vcli/** text eol=lf
