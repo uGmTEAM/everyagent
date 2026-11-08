@@ -233,6 +233,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\start-everyagent.ps1
 
 - 首次启动时若 Windows 防火墙弹窗，勾选**专用网络**允许访问，否则宿主机可能无法回连容器。
 - 局域网访问面板：`http://<本机IP>:7843`（注意安全提示）。
+- **安卓手机作为客户端**：面板已提供 Web App 元数据（`/manifest.webmanifest` 与图标），用手机 Chrome 打开局域网地址后，菜单里选「添加到主屏幕 / 安装应用」，即可获得接近原生 App 的全屏入口；iOS Safari 用「共享 → 添加到主屏幕」。手机只是远程操作面板，AI 容器仍运行在 Windows 宿主机上，手机不需要安装 Docker 或 Node。
 - **面板与 7842 端口没有鉴权**，不要做公网端口映射；确需远程访问时请加带认证的反向代理或 VPN。
 
 默认端口可用环境变量覆盖（启动前设置）：
