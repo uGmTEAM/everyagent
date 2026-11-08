@@ -121,7 +121,33 @@ GitHub Release 资产（可直接作为工具集压缩包在「预设工具」�
 - bilibili-client `v0.1.0`：`bilic-0.1.0-linux-x86_64.tar.gz`
 - mail-cli `v1.0.0`：`mail-cli-toolkit-1.0.0.tar.gz`、`mail-cli-1.0.0-toolkit-linux-x86_64.tar.gz`
 - ai-qq-bridge `v1.0.0`：`qq-bridge-client-toolkit-1.0.0.tar.gz`
-- video-cli `v0.1.0`：`video-cli-toolkit-0.1.0.tar.gz`
+- video-cli `v0.2.0`：`video-cli-toolkit-0.2.0.tar.gz`
+
+## 安卓客户端（android/）
+
+目录：`android/`，原生 WebView 壳，加载电脑上的面板地址，供手机远程操作。无第三方依赖（只用 Android 原生 API），最低 Android 7.0（API 24）。
+
+构建环境（本机已装，均在 G 盘，不进仓库）：
+
+| 组件 | 路径 |
+| --- | --- |
+| JDK 17（Temurin） | `G:\android-dev\jdk17` |
+| Android SDK | `G:\android-dev\sdk`（platform-tools、platforms;android-34、build-tools;34.0.0） |
+| Gradle 8.7 | `G:\android-dev\gradle` |
+
+`android/local.properties` 写 `sdk.dir=G\:/android-dev/sdk`（本机路径，已 gitignore）。构建：
+
+```powershell
+$env:JAVA_HOME='G:\android-dev\jdk17'
+$env:ANDROID_HOME='G:\android-dev\sdk'
+& 'G:\android-dev\gradle\bin\gradle.bat' assembleDebug -p g:\everyagent\android
+```
+
+产物：`android\app\build\outputs\apk\debug\app-debug.apk`（debug 签名，可直接安装）。
+
+功能：首次启动填写面板地址（默认补 `:7843`）；连接失败时弹窗可改地址；支持 WebView 文件上传（面板语料/附件）；非 http(s) 链接交给系统浏览器；返回键优先回退页面。明文 HTTP 通过 `android:usesCleartextTraffic="true"` 放行（局域网面板无 HTTPS）。
+
+天气/网络受限时 SDK 组件下载可重跑 `sdkmanager --sdk_root=G:\android-dev\sdk "platform-tools" "platforms;android-34" "build-tools;34.0.0"`，已下载的会跳过。
 
 ## bilibili_client（B 站 Linux 命令行客户端）
 
