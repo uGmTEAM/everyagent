@@ -491,7 +491,7 @@ git archive --format=zip --prefix=everyagent-v1.1.0/ HEAD -o release/everyagent-
 gh release create v1.1.0 release/everyagent-v1.1.0.zip --title "EveryAgent v1.1.0" --notes-file release/notes.md
 ```
 
-`uploads.github.com` 可达，Release 资源上传正常。已发布：v1.0.0 <https://github.com/uGmTEAM/everyagent/releases/tag/v1.0.0>、v1.1.0 <https://github.com/uGmTEAM/everyagent/releases/tag/v1.1.0>（15.1MB，含 `companion-image/` 与 `tools/build-companion-image.ps1`）、v1.2.0 <https://github.com/uGmTEAM/everyagent/releases/tag/v1.2.0>（15.2MB，含插件系统；附加资产 `ea-plugin-companion-1.1.1.zip`）、v1.2.1 <https://github.com/uGmTEAM/everyagent/releases/tag/v1.2.1>（Windows 一键安装与快捷启动）、v1.2.2 <https://github.com/uGmTEAM/everyagent/releases/tag/v1.2.2>（25.9MB，官方工具从 GitHub 拉取、video-cli 0.2.0、面板 Web App 元数据）。
+`uploads.github.com` 可达，Release 资源上传正常。已发布：v1.0.0 <https://github.com/uGmTEAM/everyagent/releases/tag/v1.0.0>、v1.1.0 <https://github.com/uGmTEAM/everyagent/releases/tag/v1.1.0>（15.1MB，含 `companion-image/` 与 `tools/build-companion-image.ps1`）、v1.2.0 <https://github.com/uGmTEAM/everyagent/releases/tag/v1.2.0>（15.2MB，含插件系统；附加资产 `ea-plugin-companion-1.1.1.zip`）、v1.2.1 <https://github.com/uGmTEAM/everyagent/releases/tag/v1.2.1>（Windows 一键安装与快捷启动）、v1.2.2 <https://github.com/uGmTEAM/everyagent/releases/tag/v1.2.2>（25.9MB，官方工具从 GitHub 拉取、video-cli 0.2.0、面板 Web App 元数据；附加资产 `everyagent-android-1.0.0.apk`，发行包内也放了一份 `android/`）。
 
 打包用 `git archive --format=zip --prefix=everyagent-v<版本>/ -o release/everyagent-v<版本>.zip HEAD`；发布前确认包内含 `toolkits/` 且不含 `node_modules`、`bakup`、`data`、`test-output`。
 
