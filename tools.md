@@ -143,7 +143,17 @@ $env:ANDROID_HOME='G:\android-dev\sdk'
 & 'G:\android-dev\gradle\bin\gradle.bat' assembleDebug -p g:\everyagent\android
 ```
 
-产物：`android\app\build\outputs\apk\debug\app-debug.apk`（debug 签名，可直接安装）。
+产物：`android\app\build\outputs\apk\debug\app-debug.apk`（debug 签名）、`android\app\build\outputs\apk\release\app-release.apk`（正式签名）。
+
+正式签名材料（不进仓库）：keystore `G:\android-dev\keystore\everyagent-release.jks`，alias `everyagent`，有效期 10000 天；密码见同目录 `keystore.properties`（`android\keystore.properties` 是副本，已被 gitignore）。证书 SHA-256 指纹：`d8641007af31a6bd4712074c0efba8243ca42faaf3c2fa3875a0ebc16472ba11`，可据此核对后续安装包是否同一签名。丢失 keystore 会导致已安装用户无法覆盖升级，请备份 `G:\android-dev\keystore\`。
+
+签名构建：
+
+```powershell
+$env:JAVA_HOME='G:\android-dev\jdk17'; $env:ANDROID_HOME='G:\android-dev\sdk'; $env:GRADLE_USER_HOME='G:\android-dev\gradle-home'
+& 'G:\android-dev\gradle\bin\gradle.bat' assembleRelease -p g:\everyagent\android
+& 'G:\android-dev\sdk\build-tools\34.0.0\apksigner.bat' verify --print-certs g:\everyagent\android\app\build\outputs\apk\release\app-release.apk
+```
 
 功能：首次启动填写面板地址（默认补 `:7843`）；连接失败时弹窗可改地址；支持 WebView 文件上传（面板语料/附件）；非 http(s) 链接交给系统浏览器；返回键优先回退页面。明文 HTTP 通过 `android:usesCleartextTraffic="true"` 放行（局域网面板无 HTTPS）。
 
